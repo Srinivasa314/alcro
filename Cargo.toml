@@ -1,0 +1,9 @@
+[package]
+name = "alcro"
+version = "0.1.0"
+authors = ["Srinivasa <m.srinivasa1234@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
