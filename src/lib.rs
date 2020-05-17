@@ -117,16 +117,19 @@ impl UI {
         return self.done.load(Ordering::SeqCst);
     }
 
-    pub fn wait_finish(&mut self) {
-        match self.killing_thread.take().unwrap().join() {
-            Ok(_) => (),
-            Err(e) => panic!(e),
-        }
-    }
-
     pub fn close(&self) {
         if !self.done() {
             self.kill_send.send(()).expect("Receiver end closed");
+        }
+    }
+}
+
+impl Drop for UI {
+    fn drop(&mut self) {
+        self.close();
+        match self.killing_thread.take().unwrap().join() {
+            Ok(_) => (),
+            Err(e) => panic!(e),
         }
     }
 }
