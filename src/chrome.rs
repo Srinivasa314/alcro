@@ -1,16 +1,16 @@
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use websocket::client::ClientBuilder;
 use websocket::OwnedMessage;
-use std::sync::{Arc,Mutex};
 
 pub struct Chrome {
     id: i32,
     pub cmd: Option<Child>,
     pub ws: Option<Arc<Mutex<WSChannel>>>,
-    target:String,
-    session:String,
-    window:i32
+    target: String,
+    session: String,
+    window: i32,
 }
 
 pub struct WSChannel(
@@ -31,10 +31,11 @@ impl Chrome {
                     .expect("Cannot spawn chrome"),
             ),
             ws: None,
-            target:String::new(),
-            session:String::new(),
-            window:0
+            target: String::new(),
+            session: String::new(),
+            window: 0,
         };
+
         let stderr = BufReader::new(c.cmd.as_mut().unwrap().stderr.take().unwrap());
         let re = regex::Regex::new(r"^DevTools listening on (ws://.*?)$").unwrap();
 
@@ -52,8 +53,11 @@ impl Chrome {
         let ws = ClientBuilder::new(&ws_url).unwrap().connect_insecure();
         let (ws_send, ws_recv) = ws.expect("Websocket connection failed").split().unwrap();
         c.ws = Some(Arc::new(Mutex::new(WSChannel(ws_send, ws_recv))));
-        println!("{}",c.find_target());
-        //TODO:Initialize Session
+        c.target = c.find_target();
+        c.start_session();
+        c.session = c.start_session();
+        //c.readloop,...
+        //TODO c.window = 0;
         c
     }
 
@@ -75,6 +79,7 @@ impl Chrome {
                 .to_string(),
             ))
             .expect("Unable to send websocket message");
+
         loop {
             match self
                 .ws
@@ -87,12 +92,62 @@ impl Chrome {
                 .expect("Failed to receive websocket message")
             {
                 OwnedMessage::Text(t) => {
-                    let wsresult:WSResult<TargetCreatedParams>=serde_json::from_str(&t).expect("Invalid JSON");
-                    if wsresult.method=="Target.targetCreated"&&wsresult.params.target_info.r#type=="page" {
+                    let wsresult: WSResult<TargetCreatedParams> = match serde_json::from_str(&t) {
+                        Ok(result) => result,
+                        Err(_) => continue,
+                    };
+                    if wsresult.method == "Target.targetCreated"
+                        && wsresult.params.target_info.r#type == "page"
+                    {
                         return wsresult.params.target_info.target_id;
                     }
+                }
+                _ => panic!("Received non text from websocket"),
+            }
+        }
+    }
 
-                },
+    fn start_session(&mut self) -> String {
+        let message = format!(
+            r#"
+        {{
+        "id": 1, 
+        "method": "Target.attachToTarget",
+        "params": {{"targetId": "{target}"}}
+        }}
+        "#,
+            target = self.target
+        );
+
+        self.ws
+            .as_mut()
+            .unwrap()
+            .lock()
+            .expect("Unable to lock")
+            .1
+            .send_message(&OwnedMessage::Text(message))
+            .expect("Unable to send message");
+
+        loop {
+            match self
+                .ws
+                .as_mut()
+                .unwrap()
+                .lock()
+                .expect("Unable to lock")
+                .0
+                .recv_message()
+                .expect("Failed to receive websocket message")
+            {
+                OwnedMessage::Text(t) => {
+                    let session_result: SessionResult = match serde_json::from_str(&t) {
+                        Ok(result) => result,
+                        Err(_) => continue,
+                    };
+                    if session_result.id == 1 {
+                        return session_result.result.session_id;
+                    }
+                }
                 _ => panic!("Received non text from websocket"),
             }
         }
@@ -100,26 +155,34 @@ impl Chrome {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all="camelCase")]
+#[serde(rename_all = "camelCase")]
 struct WSResult<T> {
-    method:String,
-    params:T
+    method: String,
+    params: T,
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all="camelCase")]
+#[serde(rename_all = "camelCase")]
 struct TargetCreatedParams {
-    target_info:TargetInfo
+    target_info: TargetInfo,
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all="camelCase")]
+#[serde(rename_all = "camelCase")]
 struct TargetInfo {
-    target_id:String,
-    r#type:String,
-    title:String,
-    url:String,
-    attached:bool
+    target_id: String,
+    r#type: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionResult {
+    id: i32,
+    result: SessionId,
+}
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionId {
+    session_id: String,
+}

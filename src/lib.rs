@@ -89,6 +89,7 @@ impl UI {
         let done_cloned = Arc::clone(&done);
         let mut chrome_cmd = chrome.cmd.take().unwrap();
         let chrome_ws = Arc::clone(&chrome.ws.as_ref().unwrap());
+
         let killing_thread = Some(std::thread::spawn(move || loop {
             if chrome_cmd.try_wait().expect("Error in waiting").is_some() {
                 done_cloned.store(true, Ordering::SeqCst);
@@ -120,7 +121,7 @@ impl UI {
     }
 
     pub fn wait_finish(&mut self) {
-        self.waiting=true;
+        self.waiting = true;
         match self.killing_thread.take().unwrap().join() {
             Ok(_) => (),
             Err(e) => panic!(e),

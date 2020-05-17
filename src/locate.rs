@@ -28,7 +28,7 @@ fn paths() -> &'static [&'static str] {
 }
 
 #[cfg(target_os = "windows")]
-fn paths() -> [String;6] {
+fn paths() -> [String; 6] {
 	return [
 		var("LocalAppData").unwrap() + "/Google/Chrome/Application/chrome.exe",
 		var("ProgramFiles").unwrap() + "/Google/Chrome/Application/chrome.exe",
