@@ -9,3 +9,8 @@ edition = "2018"
 [dependencies]
 tempdir = "^0"
 regex = "^1"
+serde = "^1"
+serde_derive = "^1"
+ws = "^0"
+serde_json = "^1"
+websocket = "^0"

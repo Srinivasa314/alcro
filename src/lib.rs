@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate serde_derive;
+
 use std::sync::mpsc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -6,8 +9,10 @@ use std::sync::{
 
 mod chrome;
 use chrome::Chrome;
+mod locate;
+use locate::locate_chrome;
 
-const DEFAULT_CHROME_ARGS: [&str; 25] = [
+const DEFAULT_CHROME_ARGS: &[&str] = &[
     "--disable-background-networking",
     "--disable-background-timer-throttling",
     "--disable-backgrounding-occluded-windows",
@@ -39,7 +44,8 @@ pub struct UI {
     chrome: Chrome,
     tmpdir: Option<tempdir::TempDir>,
     kill_send: mpsc::Sender<()>,
-    done: Arc<AtomicBool>, //TODO:Add channel
+    done: Arc<AtomicBool>,
+    killing_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl UI {
@@ -63,7 +69,7 @@ impl UI {
             dir
         };
 
-        let mut args: Vec<String> = Vec::from(&DEFAULT_CHROME_ARGS[..])
+        let mut args: Vec<String> = Vec::from(DEFAULT_CHROME_ARGS)
             .into_iter()
             .map(|s| s.to_string())
             .collect();
@@ -75,35 +81,47 @@ impl UI {
         }
         args.push("--remote-debugging-port=0".to_string());
 
-        let mut chrome = Chrome::new_with_args("/usr/bin/google-chrome", args); //TODO:Make chrome exe fn
+        let mut chrome = Chrome::new_with_args(&locate_chrome(), args);
         let done = Arc::new(AtomicBool::new(false));
 
         let (kill_send, kill_recv) = mpsc::channel();
         let done_cloned = Arc::clone(&done);
         let mut chrome_cmd = chrome.cmd.take().unwrap();
-        std::thread::spawn(move || {
-            loop {
-                if chrome_cmd.try_wait().expect("Error in waiting").is_some() {
-                    done_cloned.store(true, Ordering::SeqCst);
-                    break;
-                } else if kill_recv.try_recv().is_ok() {
-                    //TODO:Close websocket
-                    chrome_cmd.kill();
-                    done_cloned.store(true, Ordering::SeqCst);
-                    break;
-                }
+        let chrome_ws = Arc::clone(&chrome.ws.as_ref().unwrap());
+        let killing_thread = Some(std::thread::spawn(move || loop {
+            if chrome_cmd.try_wait().expect("Error in waiting").is_some() {
+                done_cloned.store(true, Ordering::SeqCst);
+                break;
+            } else if kill_recv.try_recv().is_ok() {
+                chrome_ws
+                    .lock()
+                    .expect("Unable to lock")
+                    .0
+                    .shutdown_all()
+                    .expect("Unable to shutdown");
+                chrome_cmd.kill().expect("Unable to kill chrome");
+                done_cloned.store(true, Ordering::SeqCst);
+                break;
             }
-        });
+        }));
         UI {
             chrome,
-            done,
             tmpdir,
+            done,
             kill_send,
+            killing_thread,
         }
     }
 
     pub fn done(&self) -> bool {
         return self.done.load(Ordering::SeqCst);
+    }
+
+    pub fn wait_finish(&mut self) {
+        match self.killing_thread.take().unwrap().join() {
+            Ok(_) => (),
+            Err(e) => panic!(e),
+        }
     }
 
     pub fn close(&self) {
