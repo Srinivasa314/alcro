@@ -45,6 +45,7 @@ pub struct UI {
     tmpdir: Option<tempdir::TempDir>,
     kill_send: mpsc::Sender<()>,
     done: Arc<AtomicBool>,
+    waiting: bool,
     killing_thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -110,11 +111,20 @@ impl UI {
             done,
             kill_send,
             killing_thread,
+            waiting: false,
         }
     }
 
     pub fn done(&self) -> bool {
         return self.done.load(Ordering::SeqCst);
+    }
+
+    pub fn wait_finish(&mut self) {
+        self.waiting=true;
+        match self.killing_thread.take().unwrap().join() {
+            Ok(_) => (),
+            Err(e) => panic!(e),
+        }
     }
 
     pub fn close(&self) {
@@ -126,10 +136,9 @@ impl UI {
 
 impl Drop for UI {
     fn drop(&mut self) {
-        self.close();
-        match self.killing_thread.take().unwrap().join() {
-            Ok(_) => (),
-            Err(e) => panic!(e),
+        if !self.waiting {
+            self.close();
+            self.wait_finish();
         }
     }
 }
