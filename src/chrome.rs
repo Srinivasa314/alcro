@@ -2,7 +2,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use websocket::client::ClientBuilder;
-use websocket::OwnedMessage;
+use websocket::{Message, OwnedMessage};
 
 pub struct Chrome {
     id: i32,
@@ -53,32 +53,24 @@ impl Chrome {
         let ws = ClientBuilder::new(&ws_url).unwrap().connect_insecure();
         let (ws_send, ws_recv) = ws.expect("Websocket connection failed").split().unwrap();
         c.ws = Some(Arc::new(Mutex::new(WSChannel(ws_send, ws_recv))));
+
         c.target = c.find_target();
         c.start_session();
         c.session = c.start_session();
-        //c.readloop,...
         //TODO c.window = 0;
         c
     }
 
     fn find_target(&mut self) -> String {
-        self.ws
-            .as_mut()
-            .unwrap()
-            .lock()
-            .expect("Unable to lock")
-            .1
-            .send_message(&OwnedMessage::Text(
-                r#"
-                {
-                "id": 0,
-                "method": "Target.setDiscoverTargets",
-                "params": { "discover": true }
-                }              
-                "#
-                .to_string(),
-            ))
-            .expect("Unable to send websocket message");
+        self.send_msg_to_ws(
+            r#"
+            {
+            "id": 0,
+            "method": "Target.setDiscoverTargets",
+            "params": { "discover": true }
+            }              
+            "#,
+        );
 
         loop {
             match self
@@ -108,25 +100,16 @@ impl Chrome {
     }
 
     fn start_session(&mut self) -> String {
-        let message = format!(
+        self.send_msg_to_ws(&format!(
             r#"
-        {{
-        "id": 1, 
-        "method": "Target.attachToTarget",
-        "params": {{"targetId": "{target}"}}
-        }}
-        "#,
+            {{
+            "id": 1, 
+            "method": "Target.attachToTarget",
+            "params": {{"targetId": "{target}"}}
+            }}
+            "#,
             target = self.target
-        );
-
-        self.ws
-            .as_mut()
-            .unwrap()
-            .lock()
-            .expect("Unable to lock")
-            .1
-            .send_message(&OwnedMessage::Text(message))
-            .expect("Unable to send message");
+        ));
 
         loop {
             match self
@@ -151,6 +134,17 @@ impl Chrome {
                 _ => panic!("Received non text from websocket"),
             }
         }
+    }
+
+    fn send_msg_to_ws(&mut self, message: &str) {
+        self.ws
+            .as_mut()
+            .unwrap()
+            .lock()
+            .expect("Unable to lock")
+            .1
+            .send_message(&Message::text(message))
+            .expect("Unable to send message");
     }
 }
 
