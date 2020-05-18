@@ -32,7 +32,7 @@ fn send_msg_to_ws(ws: Arc<Mutex<WSChannel>>, message: &str) {
         .expect("Unable to send message");
 }
 
-fn recv_msg_from_ws(ws: Arc<Mutex<WSChannel>>) -> String {
+fn recv_msg_from_ws(ws: Arc<Mutex<WSChannel>>) -> Option<String> {
     match ws
         .lock()
         .expect("Unable to lock")
@@ -40,8 +40,8 @@ fn recv_msg_from_ws(ws: Arc<Mutex<WSChannel>>) -> String {
         .recv_message()
         .expect("Failed to receive websocket message")
     {
-        OwnedMessage::Text(t) => t,
-        _ => panic!("Received non text from websocket"),
+        OwnedMessage::Text(t) => Some(t),
+        _ => None,
     }
 }
 
@@ -129,7 +129,7 @@ impl Chrome {
 
         loop {
             let t = recv_msg_from_ws(Arc::clone(&self.ws.as_ref().unwrap()));
-            let wsresult: WSResult<TargetCreatedParams> = match serde_json::from_str(&t) {
+            let wsresult: WSResult<TargetCreatedParams> = match serde_json::from_str(&t.unwrap()) {
                 Ok(result) => result,
                 Err(_) => continue,
             };
@@ -158,7 +158,7 @@ impl Chrome {
 
         loop {
             let t = recv_msg_from_ws(Arc::clone(&self.ws.as_ref().unwrap()));
-            let session_result: SessionResult = match serde_json::from_str(&t) {
+            let session_result: SessionResult = match serde_json::from_str(&t.unwrap()) {
                 Ok(result) => result,
                 Err(_) => continue,
             };
