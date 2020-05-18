@@ -178,7 +178,6 @@ impl Chrome {
                 };
 
                 process.kill();
-                self.done.store(true, Ordering::SeqCst);
             }
             None => {
                 if !self.done() {
