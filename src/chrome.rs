@@ -4,6 +4,9 @@ use std::sync::{Arc, Mutex};
 use websocket::client::ClientBuilder;
 use websocket::{Message, OwnedMessage};
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+
 pub struct Chrome {
     id: i32,
     pub cmd: Option<Child>,
@@ -11,6 +14,9 @@ pub struct Chrome {
     target: String,
     session: String,
     window: i32,
+    kill_send: mpsc::Sender<()>,
+    done: Arc<AtomicBool>,
+    killing_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 pub struct WSChannel(
@@ -41,6 +47,8 @@ fn recv_msg_from_ws(ws: Arc<Mutex<WSChannel>>) -> String {
 
 impl Chrome {
     pub fn new_with_args(chrome_binary: &str, args: Vec<String>) -> Chrome {
+        let (kill_send, kill_recv) = mpsc::channel();
+
         let mut c = Chrome {
             id: 2,
             cmd: Some(
@@ -55,6 +63,9 @@ impl Chrome {
             target: String::new(),
             session: String::new(),
             window: 0,
+            done: Arc::new(AtomicBool::new(false)),
+            kill_send,
+            killing_thread: None,
         };
 
         let stderr = BufReader::new(c.cmd.as_mut().unwrap().stderr.take().unwrap());
@@ -80,7 +91,27 @@ impl Chrome {
         c.session = c.start_session();
         //TODO:Remove this
         println!("Session={}", c.session);
-        //TODO c.window = 0;
+        //TODO c.readloop... c.window = 0;
+        let done_cloned = Arc::clone(&c.done);
+        let mut chrome_cmd = c.cmd.take().unwrap();
+        let chrome_ws = Arc::clone(&c.ws.as_ref().unwrap());
+
+        c.killing_thread = Some(std::thread::spawn(move || loop {
+            if chrome_cmd.try_wait().expect("Error in waiting").is_some() {
+                done_cloned.store(true, Ordering::SeqCst);
+                break;
+            } else if kill_recv.try_recv().is_ok() {
+                chrome_ws
+                    .lock()
+                    .expect("Unable to lock")
+                    .0
+                    .shutdown_all()
+                    .expect("Unable to shutdown");
+                chrome_cmd.kill().expect("Unable to kill chrome");
+                done_cloned.store(true, Ordering::SeqCst);
+                break;
+            }
+        }));
         c
     }
 
@@ -134,6 +165,46 @@ impl Chrome {
             if session_result.id == 1 {
                 return session_result.result.session_id;
             }
+        }
+    }
+
+    pub fn kill(&mut self) {
+        match &mut self.cmd {
+            Some(proc) => {
+                if let Some(ws) = &self.ws {
+                    ws.lock()
+                        .expect("Unable to lock")
+                        .0
+                        .shutdown_all()
+                        .expect("Unable to shutdown");
+                };
+                proc.kill().expect("Chrome process not running");
+            }
+            None => {
+                if !self.done() {
+                    self.kill_send.send(()).expect("Receiver end closed");
+                }
+            }
+        }
+    }
+
+    pub fn done(&self) -> bool {
+        return self.done.load(Ordering::SeqCst);
+    }
+
+    pub fn wait_finish(&mut self) {
+        match self.killing_thread.take().unwrap().join() {
+            Ok(_) => (),
+            Err(e) => panic!(e),
+        }
+    }
+}
+
+impl Drop for Chrome {
+    fn drop(&mut self) {
+        if !self.done() {
+            self.kill();
+            self.wait_finish();
         }
     }
 }

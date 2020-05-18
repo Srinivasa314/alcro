@@ -1,12 +1,6 @@
 #[macro_use]
 extern crate serde_derive;
 
-use std::sync::mpsc;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
-
 mod chrome;
 use chrome::Chrome;
 mod locate;
@@ -43,9 +37,6 @@ const DEFAULT_CHROME_ARGS: &[&str] = &[
 pub struct UI {
     chrome: Chrome,
     tmpdir: Option<tempdir::TempDir>,
-    kill_send: mpsc::Sender<()>,
-    done: Arc<AtomicBool>,
-    killing_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl UI {
@@ -81,62 +72,22 @@ impl UI {
         }
         args.push("--remote-debugging-port=0".to_string());
 
-        let mut chrome = Chrome::new_with_args(&locate_chrome(), args);
-        let done = Arc::new(AtomicBool::new(false));
-
-        let (kill_send, kill_recv) = mpsc::channel();
-        let done_cloned = Arc::clone(&done);
-        let mut chrome_cmd = chrome.cmd.take().unwrap();
-        let chrome_ws = Arc::clone(&chrome.ws.as_ref().unwrap());
-
-        let killing_thread = Some(std::thread::spawn(move || loop {
-            if chrome_cmd.try_wait().expect("Error in waiting").is_some() {
-                done_cloned.store(true, Ordering::SeqCst);
-                break;
-            } else if kill_recv.try_recv().is_ok() {
-                chrome_ws
-                    .lock()
-                    .expect("Unable to lock")
-                    .0
-                    .shutdown_all()
-                    .expect("Unable to shutdown");
-                chrome_cmd.kill().expect("Unable to kill chrome");
-                done_cloned.store(true, Ordering::SeqCst);
-                break;
-            }
-        }));
+        let chrome = Chrome::new_with_args(&locate_chrome(), args);
         UI {
             chrome,
             tmpdir,
-            done,
-            kill_send,
-            killing_thread,
         }
     }
 
     pub fn done(&self) -> bool {
-        return self.done.load(Ordering::SeqCst);
+        return self.chrome.done();
     }
 
     pub fn wait_finish(&mut self) {
-        match self.killing_thread.take().unwrap().join() {
-            Ok(_) => (),
-            Err(e) => panic!(e),
-        }
+        self.chrome.wait_finish();
     }
 
-    pub fn close(&self) {
-        if !self.done() {
-            self.kill_send.send(()).expect("Receiver end closed");
-        }
-    }
-}
-
-impl Drop for UI {
-    fn drop(&mut self) {
-        if !self.done() {
-            self.close();
-            self.wait_finish();
-        }
+    pub fn close(&mut self) {
+        self.chrome.kill()
     }
 }

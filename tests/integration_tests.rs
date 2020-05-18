@@ -8,7 +8,7 @@ fn test_ui() {
 
 #[test]
 fn test_ui_close() {
-    let ui = UI::new(
+    let mut ui = UI::new(
         "data:text/html,<html>I will close in 3 seconds.You can close if you want.</html>",
         "",
         480,
