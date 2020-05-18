@@ -83,11 +83,11 @@ impl UI {
         return self.chrome.done();
     }
 
-    pub fn wait_finish(&mut self) {
+    pub fn wait_finish(mut self) {
         self.chrome.wait_finish();
     }
 
-    pub fn close(&mut self) {
+    pub fn close(mut self) {
         self.chrome.kill()
     }
 }

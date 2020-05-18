@@ -82,7 +82,9 @@ impl Chrome {
             }
         }
 
-        let ws = ClientBuilder::new(&ws_url).unwrap().connect_insecure();
+        let ws = ClientBuilder::new(&ws_url)
+            .expect("Unable to parse ws url")
+            .connect_insecure();
         let (ws_send, ws_recv) = ws.expect("Websocket connection failed").split().unwrap();
         c.ws = Some(Arc::new(Mutex::new(WSChannel(ws_send, ws_recv))));
 
@@ -101,13 +103,11 @@ impl Chrome {
                 done_cloned.store(true, Ordering::SeqCst);
                 break;
             } else if kill_recv.try_recv().is_ok() {
-                chrome_ws
-                    .lock()
-                    .expect("Unable to lock")
-                    .0
-                    .shutdown_all()
-                    .expect("Unable to shutdown");
-                chrome_cmd.kill().expect("Unable to kill chrome");
+                if let Ok(ws) = chrome_ws.lock() {
+                    ws.0.shutdown_all().expect("Unable to shutdown");
+                }
+
+                chrome_cmd.kill();
                 done_cloned.store(true, Ordering::SeqCst);
                 break;
             }
@@ -170,15 +170,15 @@ impl Chrome {
 
     pub fn kill(&mut self) {
         match &mut self.cmd {
-            Some(proc) => {
+            Some(process) => {
                 if let Some(ws) = &self.ws {
-                    ws.lock()
-                        .expect("Unable to lock")
-                        .0
-                        .shutdown_all()
-                        .expect("Unable to shutdown");
+                    if let Ok(ws) = ws.lock() {
+                        ws.0.shutdown_all().expect("Unable to shutdown");
+                    }
                 };
-                proc.kill().expect("Chrome process not running");
+
+                process.kill();
+                self.done.store(true, Ordering::SeqCst);
             }
             None => {
                 if !self.done() {
@@ -195,7 +195,7 @@ impl Chrome {
     pub fn wait_finish(&mut self) {
         match self.killing_thread.take().unwrap().join() {
             Ok(_) => (),
-            Err(e) => panic!(e),
+            Err(e) => eprintln!("Error in killing_thread: {:?}", e),
         }
     }
 }
@@ -204,7 +204,9 @@ impl Drop for Chrome {
     fn drop(&mut self) {
         if !self.done() {
             self.kill();
-            self.wait_finish();
+            if self.killing_thread.is_some() {
+                self.wait_finish();
+            }
         }
     }
 }
