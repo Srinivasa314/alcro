@@ -32,16 +32,16 @@ fn send_msg_to_ws(ws: Arc<Mutex<WSChannel>>, message: &str) {
         .expect("Unable to send message");
 }
 
-fn recv_msg_from_ws(ws: Arc<Mutex<WSChannel>>) -> Option<String> {
+fn recv_msg_from_ws(ws: Arc<Mutex<WSChannel>>) -> Result<Option<String>,&'static str> {
     match ws
         .lock()
         .expect("Unable to lock")
         .0
         .recv_message()
-        .expect("Failed to receive websocket message")
     {
-        OwnedMessage::Text(t) => Some(t),
-        _ => None,
+        Ok(OwnedMessage::Text(t)) => Ok(Some(t)),
+        Ok(_) => Err("Received non UTF8 data"),
+        Err(_)=>Ok(None)
     }
 }
 
@@ -91,9 +91,10 @@ impl Chrome {
         c.target = c.find_target();
         c.start_session();
         c.session = c.start_session();
-        //TODO:Remove this
-        println!("Session={}", c.session);
-        //TODO c.readloop... c.window = 0;
+        
+        let ws_cloned=Arc::clone(&c.ws.as_ref().unwrap());
+        std::thread::spawn(move ||readloop(ws_cloned));
+        //TODO c.readloop...
         let done_cloned = Arc::clone(&c.done);
         let mut chrome_cmd = c.cmd.take().unwrap();
         let chrome_ws = Arc::clone(&c.ws.as_ref().unwrap());
@@ -129,7 +130,7 @@ impl Chrome {
 
         loop {
             let t = recv_msg_from_ws(Arc::clone(&self.ws.as_ref().unwrap()));
-            let wsresult: WSResult<TargetCreatedParams> = match serde_json::from_str(&t.unwrap()) {
+            let wsresult: WSResult<TargetCreatedParams> = match serde_json::from_str(&t.unwrap().unwrap()) {
                 Ok(result) => result,
                 Err(_) => continue,
             };
@@ -158,7 +159,7 @@ impl Chrome {
 
         loop {
             let t = recv_msg_from_ws(Arc::clone(&self.ws.as_ref().unwrap()));
-            let session_result: SessionResult = match serde_json::from_str(&t.unwrap()) {
+            let session_result: SessionResult = match serde_json::from_str(&t.unwrap().unwrap()) {
                 Ok(result) => result,
                 Err(_) => continue,
             };
@@ -205,6 +206,12 @@ impl Drop for Chrome {
         if self.killing_thread.is_some() {
             self.wait_finish();
         }
+    }
+}
+
+fn readloop(ws:Arc<Mutex<WSChannel>>) {
+    loop {
+        println!("{}",recv_msg_from_ws(Arc::clone(&ws)).unwrap());
     }
 }
 
