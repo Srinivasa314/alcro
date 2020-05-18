@@ -18,6 +18,27 @@ pub struct WSChannel(
     pub websocket::sender::Writer<std::net::TcpStream>,
 );
 
+fn send_msg_to_ws(ws: Arc<Mutex<WSChannel>>, message: &str) {
+    ws.lock()
+        .expect("Unable to lock")
+        .1
+        .send_message(&Message::text(message))
+        .expect("Unable to send message");
+}
+
+fn recv_msg_from_ws(ws: Arc<Mutex<WSChannel>>) -> String {
+    match ws
+        .lock()
+        .expect("Unable to lock")
+        .0
+        .recv_message()
+        .expect("Failed to receive websocket message")
+    {
+        OwnedMessage::Text(t) => t,
+        _ => panic!("Received non text from websocket"),
+    }
+}
+
 impl Chrome {
     pub fn new_with_args(chrome_binary: &str, args: Vec<String>) -> Chrome {
         let mut c = Chrome {
@@ -57,12 +78,15 @@ impl Chrome {
         c.target = c.find_target();
         c.start_session();
         c.session = c.start_session();
+        //TODO:Remove this
+        println!("Session={}", c.session);
         //TODO c.window = 0;
         c
     }
 
-    fn find_target(&mut self) -> String {
-        self.send_msg_to_ws(
+    fn find_target(&self) -> String {
+        send_msg_to_ws(
+            Arc::clone(&self.ws.as_ref().unwrap()),
             r#"
             {
             "id": 0,
@@ -73,78 +97,44 @@ impl Chrome {
         );
 
         loop {
-            match self
-                .ws
-                .as_mut()
-                .unwrap()
-                .lock()
-                .expect("Unable to lock")
-                .0
-                .recv_message()
-                .expect("Failed to receive websocket message")
+            let t = recv_msg_from_ws(Arc::clone(&self.ws.as_ref().unwrap()));
+            let wsresult: WSResult<TargetCreatedParams> = match serde_json::from_str(&t) {
+                Ok(result) => result,
+                Err(_) => continue,
+            };
+            if wsresult.method == "Target.targetCreated"
+                && wsresult.params.target_info.r#type == "page"
             {
-                OwnedMessage::Text(t) => {
-                    let wsresult: WSResult<TargetCreatedParams> = match serde_json::from_str(&t) {
-                        Ok(result) => result,
-                        Err(_) => continue,
-                    };
-                    if wsresult.method == "Target.targetCreated"
-                        && wsresult.params.target_info.r#type == "page"
-                    {
-                        return wsresult.params.target_info.target_id;
-                    }
-                }
-                _ => panic!("Received non text from websocket"),
+                return wsresult.params.target_info.target_id;
             }
         }
     }
 
-    fn start_session(&mut self) -> String {
-        self.send_msg_to_ws(&format!(
-            r#"
+    fn start_session(&self) -> String {
+        send_msg_to_ws(
+            Arc::clone(&self.ws.as_ref().unwrap()),
+            &format!(
+                r#"
             {{
             "id": 1, 
             "method": "Target.attachToTarget",
             "params": {{"targetId": "{target}"}}
             }}
             "#,
-            target = self.target
-        ));
+                target = self.target
+            ),
+        );
 
         loop {
-            match self
-                .ws
-                .as_mut()
-                .unwrap()
-                .lock()
-                .expect("Unable to lock")
-                .0
-                .recv_message()
-                .expect("Failed to receive websocket message")
-            {
-                OwnedMessage::Text(t) => {
-                    let session_result: SessionResult = match serde_json::from_str(&t) {
-                        Ok(result) => result,
-                        Err(_) => continue,
-                    };
-                    if session_result.id == 1 {
-                        return session_result.result.session_id;
-                    }
-                }
-                _ => panic!("Received non text from websocket"),
+            let t = recv_msg_from_ws(Arc::clone(&self.ws.as_ref().unwrap()));
+            let session_result: SessionResult = match serde_json::from_str(&t) {
+                Ok(result) => result,
+                Err(_) => continue,
+            };
+            if session_result.id == 1 {
+                return session_result.result.session_id;
             }
         }
-    }
-
-    fn send_msg_to_ws(&mut self, message: &str) {
-        self.ws
-            .as_mut()
-            .unwrap()
-            .lock()
-            .expect("Unable to lock")
-            .1
-            .send_message(&Message::text(message))
-            .expect("Unable to send message");
     }
 }
 
