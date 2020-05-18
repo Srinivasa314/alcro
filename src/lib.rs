@@ -45,7 +45,6 @@ pub struct UI {
     tmpdir: Option<tempdir::TempDir>,
     kill_send: mpsc::Sender<()>,
     done: Arc<AtomicBool>,
-    waiting: bool,
     killing_thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -112,7 +111,6 @@ impl UI {
             done,
             kill_send,
             killing_thread,
-            waiting: false,
         }
     }
 
@@ -121,7 +119,6 @@ impl UI {
     }
 
     pub fn wait_finish(&mut self) {
-        self.waiting = true;
         match self.killing_thread.take().unwrap().join() {
             Ok(_) => (),
             Err(e) => panic!(e),
@@ -137,7 +134,7 @@ impl UI {
 
 impl Drop for UI {
     fn drop(&mut self) {
-        if !self.waiting {
+        if !self.done() {
             self.close();
             self.wait_finish();
         }
