@@ -201,11 +201,9 @@ impl Chrome {
 
 impl Drop for Chrome {
     fn drop(&mut self) {
-        if !self.done() {
-            self.kill();
-            if self.killing_thread.is_some() {
-                self.wait_finish();
-            }
+        self.kill();
+        if self.killing_thread.is_some() {
+            self.wait_finish();
         }
     }
 }
