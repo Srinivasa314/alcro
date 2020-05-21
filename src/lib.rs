@@ -207,26 +207,26 @@ impl<'a> UIBuilder<'a> {
     }
 
     /// Set the content (url or html text)
-    pub fn content(&mut self, content: Content<'a>) -> &Self {
+    pub fn content(&mut self, content: Content<'a>) -> &mut Self {
         self.content = content;
         self
     }
 
     /// Set the user data directory. By default it is a temporary directory.
-    pub fn user_data_dir(&mut self, dir: &'a str) -> &Self {
+    pub fn user_data_dir(&mut self, dir: &'a str) -> &mut Self {
         self.dir = dir;
         self
     }
 
     /// Set the window size
-    pub fn size(&mut self, width: i32, height: i32) -> &Self {
+    pub fn size(&mut self, width: i32, height: i32) -> &mut Self {
         self.width = width;
         self.height = height;
         self
     }
 
     /// Add custom arguments to spawn chrome with
-    pub fn custom_args(&mut self, custom_args: &'a [&'a str]) -> &Self {
+    pub fn custom_args(&mut self, custom_args: &'a [&'a str]) -> &mut Self {
         self.custom_args = custom_args;
         self
     }

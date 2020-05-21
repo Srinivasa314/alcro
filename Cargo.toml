@@ -15,3 +15,10 @@ websocket = "^0"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "^0", features = ["winuser"] }
+
+[dev-dependencies]
+actix-web = "^1"
+actix-rt = "^0"
+rust-embed = "^5"
+mime_guess = "^2"
+futures = "^0"
