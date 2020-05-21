@@ -1,0 +1,15 @@
+<html>
+    <head>
+        <title>JS Rust Communication</title>
+        <script>
+            async function callRust() {
+                let result=await addOne(8); //js calling rust
+                document.getElementById("result").innerText=result;
+            }
+        </script>
+    </head>
+    <body>
+        <button onclick="callRust()">Call rust add_one function!</button>
+        <p id="result"></p>
+    </body>
+</html>

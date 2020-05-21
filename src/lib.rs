@@ -146,6 +146,8 @@ impl UI {
     }
 
     /// It changes the size, position or state of the browser window specified by the `Bounds` struct. It returns Err if it fails.
+    ///
+    /// If b.window_state is not "normal" the other fields are ignored
     pub fn set_bounds(&self, b: Bounds) -> JSResult {
         set_bounds(self.chrome.clone(), b)
     }

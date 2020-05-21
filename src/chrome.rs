@@ -114,7 +114,6 @@ impl Chrome {
                 if let Ok(ws) = c_arc_clone.wssend.lock() {
                     let _ = ws.shutdown_all();
                 }
-
                 let _ = c_cmd.kill();
                 c_arc_clone.done.store(true, Ordering::SeqCst);
                 break;

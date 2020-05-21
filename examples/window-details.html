@@ -1,0 +1,29 @@
+<html>
+
+<head>
+    <title>Window details</title>
+    <script>
+        function $(id) {
+            return document.getElementById(id)
+        }
+
+        function printDetails() {
+            setInterval(async () => {
+                let details = await windowDetails();
+                $("coords").innerText = `x=${details.x} y=${details.y}`
+                $("size").innerText = `height=${details.height} y=${details.width}`
+                $("state").innerText = `state=${details.state}`
+            }, 100);
+        }
+    </script>
+</head>
+
+<body>
+    To change the values below move, resize, maximize ,...etc the window <br>
+    <span id="coords"></span><br>
+    <span id="size"></span><br>
+    <span id="state"></span><br>
+    <button onclick="toggle()">Toggle Normal/Maximized</button>
+</body>
+
+</html>
