@@ -1,74 +1,72 @@
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-use websocket::client::ClientBuilder;
-use websocket::{Message, OwnedMessage};
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use crossbeam_channel::{bounded, Sender};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use websocket::{sync::stream::TcpStream, ClientBuilder};
+
+mod devtools;
+use devtools::{readloop, recv_msg_from_ws, send, send_msg_to_ws};
+
+/// A JS object
+pub type JSObject = serde_json::Value;
+/// The result of a JS function. 
+///
+/// The Err variant will be returned if 
+/// * There is an exception
+/// * An error type is returned
+pub type JSResult = Result<JSObject, JSObject>;
+/// The function type used in `UI::bind`.
+/// It takes a list of JS objects and returns a `JSResult`.
+pub type BindingFunc = fn(&[JSObject]) -> JSResult;
 
 pub struct Chrome {
-    id: i32,
-    pub cmd: Option<Child>,
-    pub ws: Option<Arc<Mutex<WSChannel>>>,
+    id: AtomicI32,
+    wssend: Mutex<websocket::sender::Writer<TcpStream>>,
+    wsrecv: Mutex<websocket::receiver::Reader<TcpStream>>,
     target: String,
     session: String,
-    window: i32,
-    kill_send: mpsc::Sender<()>,
-    done: Arc<AtomicBool>,
-    killing_thread: Option<std::thread::JoinHandle<()>>,
+    pending: Mutex<HashMap<i32, Sender<JSResult>>>,
+    window: AtomicI32,
+    kill_send: Sender<()>,
+    done: AtomicBool,
+    bindings: Mutex<HashMap<String, BindingFunc>>,
 }
 
-pub struct WSChannel(
-    pub websocket::receiver::Reader<std::net::TcpStream>,
-    pub websocket::sender::Writer<std::net::TcpStream>,
-);
+/// A struct that stores the size, position and window state of the browser window.
 
-fn send_msg_to_ws(ws: Arc<Mutex<WSChannel>>, message: &str) {
-    ws.lock()
-        .expect("Unable to lock")
-        .1
-        .send_message(&Message::text(message))
-        .expect("Unable to send message");
-}
-
-fn recv_msg_from_ws(ws: Arc<Mutex<WSChannel>>) -> Result<Option<String>,&'static str> {
-    match ws
-        .lock()
-        .expect("Unable to lock")
-        .0
-        .recv_message()
-    {
-        Ok(OwnedMessage::Text(t)) => Ok(Some(t)),
-        Ok(_) => Err("Received non UTF8 data"),
-        Err(_)=>Ok(None)
-    }
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Bounds {
+    /// x coordinate of the window
+    pub left: i32,
+    /// y coordinate of the window
+    pub top: i32,
+    /// width of the window
+    pub width: i32,
+    /// height of the window
+    pub height: i32,
+    /// "normal" "maximized" "minimized" or "fullscreen"
+    pub window_state: String,
 }
 
 impl Chrome {
-    pub fn new_with_args(chrome_binary: &str, args: Vec<String>) -> Chrome {
-        let (kill_send, kill_recv) = mpsc::channel();
+    pub fn new_with_args(chrome_binary: &str, args: Vec<String>) -> Arc<Chrome> {
+        let (kill_send, kill_recv) = bounded(1);
 
-        let mut c = Chrome {
-            id: 2,
-            cmd: Some(
-                Command::new(chrome_binary)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .args(args)
-                    .spawn()
-                    .expect("Cannot spawn chrome"),
-            ),
-            ws: None,
-            target: String::new(),
-            session: String::new(),
-            window: 0,
-            done: Arc::new(AtomicBool::new(false)),
-            kill_send,
-            killing_thread: None,
-        };
+        let mut c_cmd = Command::new(chrome_binary)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .args(&args)
+            .spawn()
+            .expect("Cannot spawn chrome");
 
-        let stderr = BufReader::new(c.cmd.as_mut().unwrap().stderr.take().unwrap());
+        let stderr = BufReader::new(c_cmd.stderr.take().unwrap());
+
         let re = regex::Regex::new(r"^DevTools listening on (ws://.*?)$").unwrap();
 
         let mut ws_url = String::new();
@@ -82,109 +80,133 @@ impl Chrome {
             }
         }
 
-        let ws = ClientBuilder::new(&ws_url)
-            .expect("Unable to parse ws url")
-            .connect_insecure();
-        let (ws_send, ws_recv) = ws.expect("Websocket connection failed").split().unwrap();
-        c.ws = Some(Arc::new(Mutex::new(WSChannel(ws_send, ws_recv))));
+        let client = ClientBuilder::new(&ws_url)
+            .unwrap()
+            .connect_insecure()
+            .unwrap();
+        let (receiver, sender) = client.split().unwrap();
+
+        let mut c = Chrome {
+            id: AtomicI32::new(2),
+            wsrecv: Mutex::new(receiver),
+            wssend: Mutex::new(sender),
+            target: String::new(),
+            session: String::new(),
+            window: AtomicI32::new(0),
+            done: AtomicBool::new(false),
+            kill_send,
+            pending: Mutex::new(HashMap::new()),
+            bindings: Mutex::new(HashMap::new()),
+        };
 
         c.target = c.find_target();
         c.start_session();
         c.session = c.start_session();
-        
-        let ws_cloned=Arc::clone(&c.ws.as_ref().unwrap());
-        std::thread::spawn(move ||readloop(ws_cloned));
-        //TODO c.readloop...
-        let done_cloned = Arc::clone(&c.done);
-        let mut chrome_cmd = c.cmd.take().unwrap();
-        let chrome_ws = Arc::clone(&c.ws.as_ref().unwrap());
 
-        c.killing_thread = Some(std::thread::spawn(move || loop {
-            if chrome_cmd.try_wait().expect("Error in waiting").is_some() {
-                done_cloned.store(true, Ordering::SeqCst);
+        let c_arc = Arc::new(c);
+        let c_arc_clone = c_arc.clone();
+
+        std::thread::spawn(move || loop {
+            if c_cmd.try_wait().expect("Error in waiting").is_some() {
+                c_arc_clone.done.store(true, Ordering::SeqCst);
                 break;
             } else if kill_recv.try_recv().is_ok() {
-                if let Ok(ws) = chrome_ws.lock() {
-                    ws.0.shutdown_all().expect("Unable to shutdown");
+                if let Ok(ws) = c_arc_clone.wssend.lock() {
+                    let _ = ws.shutdown_all();
                 }
 
-                chrome_cmd.kill();
-                done_cloned.store(true, Ordering::SeqCst);
+                let _ = c_cmd.kill();
+                c_arc_clone.done.store(true, Ordering::SeqCst);
                 break;
             }
-        }));
-        c
+        });
+
+        let c_arc_clone = c_arc.clone();
+        std::thread::spawn(move || readloop(c_arc_clone));
+
+        for (method, args) in [
+            ("Page.enable", JSObject::Null),
+            (
+                "Target.setAutoAttach",
+                json!({"autoAttach": true, "waitForDebuggerOnStart": false}),
+            ),
+            ("Network.enable", JSObject::Null),
+            ("Runtime.enable", JSObject::Null),
+            ("Security.enable", JSObject::Null),
+            ("Performance.enable", JSObject::Null),
+            ("Log.enable", JSObject::Null),
+        ]
+        .iter()
+        {
+            send(Arc::clone(&c_arc), method, args).unwrap();
+        }
+
+        if !args.contains(&"--headless".to_string()) {
+            let win_id = get_window_for_target(Arc::clone(&c_arc)).unwrap();
+            Arc::clone(&c_arc).window.store(win_id, Ordering::SeqCst);
+        }
+        c_arc
     }
 
     fn find_target(&self) -> String {
         send_msg_to_ws(
-            Arc::clone(&self.ws.as_ref().unwrap()),
-            r#"
+            &self.wssend,
+            &json!(
             {
             "id": 0,
             "method": "Target.setDiscoverTargets",
             "params": { "discover": true }
-            }              
-            "#,
+            }
+            )
+            .to_string(),
         );
 
         loop {
-            let t = recv_msg_from_ws(Arc::clone(&self.ws.as_ref().unwrap()));
-            let wsresult: WSResult<TargetCreatedParams> = match serde_json::from_str(&t.unwrap().unwrap()) {
-                Ok(result) => result,
-                Err(_) => continue,
-            };
-            if wsresult.method == "Target.targetCreated"
-                && wsresult.params.target_info.r#type == "page"
-            {
-                return wsresult.params.target_info.target_id;
+            let wsmsg: JSObject =
+                serde_json::from_str(&recv_msg_from_ws(&self.wsrecv).unwrap()).unwrap();
+            if wsmsg["method"] == "Target.targetCreated" {
+                let params = &wsmsg["params"];
+                if params["targetInfo"]["type"] == "page" {
+                    return params["targetInfo"]["targetId"]
+                        .as_str()
+                        .unwrap()
+                        .to_string();
+                }
             }
         }
     }
 
     fn start_session(&self) -> String {
         send_msg_to_ws(
-            Arc::clone(&self.ws.as_ref().unwrap()),
-            &format!(
-                r#"
-            {{
-            "id": 1, 
+            &self.wssend,
+            &json!(
+            {
+            "id": 1,
             "method": "Target.attachToTarget",
-            "params": {{"targetId": "{target}"}}
-            }}
-            "#,
-                target = self.target
-            ),
+            "params": {"targetId": self.target}
+            }
+            )
+            .to_string(),
         );
 
         loop {
-            let t = recv_msg_from_ws(Arc::clone(&self.ws.as_ref().unwrap()));
-            let session_result: SessionResult = match serde_json::from_str(&t.unwrap().unwrap()) {
-                Ok(result) => result,
-                Err(_) => continue,
-            };
-            if session_result.id == 1 {
-                return session_result.result.session_id;
+            loop {
+                let wsmsg: JSObject =
+                    serde_json::from_str(&recv_msg_from_ws(&self.wsrecv).unwrap()).unwrap();
+                if wsmsg["id"] == 1 {
+                    if wsmsg["error"] != JSObject::Null {
+                        panic!(wsmsg["error"].to_string())
+                    }
+                    let session = &wsmsg["result"];
+                    return session["sessionId"].as_str().unwrap().to_string();
+                }
             }
         }
     }
 
-    pub fn kill(&mut self) {
-        match &mut self.cmd {
-            Some(process) => {
-                if let Some(ws) = &self.ws {
-                    if let Ok(ws) = ws.lock() {
-                        ws.0.shutdown_all().expect("Unable to shutdown");
-                    }
-                };
-
-                process.kill();
-            }
-            None => {
-                if !self.done() {
-                    self.kill_send.send(()).expect("Receiver end closed");
-                }
-            }
+    pub fn kill(&self) {
+        if !self.done() {
+            self.kill_send.send(()).expect("Receiver end closed");
         }
     }
 
@@ -192,58 +214,123 @@ impl Chrome {
         return self.done.load(Ordering::SeqCst);
     }
 
-    pub fn wait_finish(&mut self) {
-        match self.killing_thread.take().unwrap().join() {
-            Ok(_) => (),
-            Err(e) => eprintln!("Error in killing_thread: {:?}", e),
+    pub fn wait_finish(&self) {
+        while !self.done() {}
+    }
+}
+
+fn get_window_for_target(c: Arc<Chrome>) -> Result<i32, JSObject> {
+    match send(
+        Arc::clone(&c),
+        "Browser.getWindowForTarget",
+        &json!({
+            "targetId": c.target
+        }),
+    ) {
+        Ok(v) => Ok(v["windowId"].as_i64().unwrap() as i32),
+        Err(e) => Err(e),
+    }
+}
+
+pub fn load(c: Arc<Chrome>, url: &str) -> JSResult {
+    return send(Arc::clone(&c), "Page.navigate", &json!({ "url": url }));
+}
+
+pub fn eval(c: Arc<Chrome>, expr: &str) -> JSResult {
+    return send(
+        c,
+        "Runtime.evaluate",
+        &json!({
+            "expression": expr, "awaitPromise": true, "returnByValue": true
+        }),
+    );
+}
+
+pub fn set_bounds(c: Arc<Chrome>, mut b: Bounds) -> JSResult {
+    if b.window_state == "" {
+        b.window_state = "normal".to_string();
+    }
+    let mut param = json!({
+        "windowId": c.window,
+        "bounds": b
+    });
+    if b.window_state != "normal" {
+        param["bounds"] = json!({
+            "windowState":b.window_state
+        });
+    }
+    send(c, "Browser.setWindowBounds", &param)
+}
+
+pub fn bounds(c: Arc<Chrome>) -> Result<Bounds, JSObject> {
+    match send(
+        Arc::clone(&c),
+        "Browser.getWindowBounds",
+        &json!({
+            "windowId": c.window.load(Ordering::SeqCst)
+        }),
+    ) {
+        Err(e) => Err(e),
+        Ok(result) => {
+            let ret: Bounds = serde_json::from_value(result["bounds"].clone()).unwrap();
+            Ok(ret)
         }
     }
 }
 
-impl Drop for Chrome {
-    fn drop(&mut self) {
-        self.kill();
-        if self.killing_thread.is_some() {
-            self.wait_finish();
+pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> JSResult {
+    {
+        let mut bindings = c.bindings.lock().unwrap();
+        if bindings.contains_key(name) {
+            return Ok(JSObject::Null);
+        } else {
+            bindings.insert(name.to_string(), f);
         }
     }
-}
 
-fn readloop(ws:Arc<Mutex<WSChannel>>) {
-    loop {
-        println!("{}",recv_msg_from_ws(Arc::clone(&ws)).unwrap());
+    if let Err(e) = send(
+        Arc::clone(&c),
+        "Runtime.addBinding",
+        &json!({ "name": name }),
+    ) {
+        return Err(e);
     }
-}
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WSResult<T> {
-    method: String,
-    params: T,
-}
+    let script = format!(
+        r"(()=>{{
+        const bindingName = '{name}';
+        const binding = window[bindingName];
+        window[bindingName] = async (...args) => {{
+            const me = window[bindingName];
+            let errors = me['errors'];
+            let callbacks = me['callbacks'];
+            if (!callbacks) {{
+                callbacks = new Map();
+                me['callbacks'] = callbacks;
+            }}
+            if (!errors) {{
+                errors = new Map();
+                me['errors'] = errors;
+            }}
+            const seq = (me['lastSeq'] || 0) + 1;
+            me['lastSeq'] = seq;
+            const promise = new Promise((resolve, reject) => {{
+                callbacks.set(seq, resolve);
+                errors.set(seq, reject);
+            }});
+            binding(JSON.stringify({{name: bindingName, seq, args}}));
+            return promise;
+        }}}})();
+   ",
+        name = name
+    );
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TargetCreatedParams {
-    target_info: TargetInfo,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TargetInfo {
-    target_id: String,
-    r#type: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SessionResult {
-    id: i32,
-    result: SessionId,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SessionId {
-    session_id: String,
+    if let Err(e) = send(
+        Arc::clone(&c),
+        "Page.addScriptToEvaluateOnNewDocument",
+        &json!({ "source": script }),
+    ) {
+        return Err(e);
+    }
+    return eval(Arc::clone(&c), &script);
 }

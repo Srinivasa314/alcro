@@ -2,6 +2,8 @@
 use std::env::var;
 use std::path::Path;
 
+//TODO:Add other chrome-based browers(edge,..etc)
+
 #[cfg(target_os = "macos")]
 const PATHS: &[&str] = &[
 	"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -45,5 +47,34 @@ pub fn locate_chrome() -> String {
 			return path.to_string();
 		}
 	}
-	panic!("Cannot find chrome"); //TODO:FIX
+	prompt_download();
+	panic!("Chrome not found!");
+}
+
+mod messagebox;
+use messagebox::message_box;
+use std::process::Command;
+
+fn prompt_download() {
+	let title = "Chrome not found";
+	let text =
+		"No Chrome/Chromium installation was found. Would you like to download and install it now?";
+
+	if !message_box(title, text) {
+		return;
+	}
+
+	let url = "https://www.google.com/chrome/";
+
+	#[cfg(target_os = "linux")]
+	Command::new("xdg-open").arg(url).spawn().unwrap();
+	#[cfg(target_os = "macos")]
+	Command::new("open").arg(url).spawn().unwrap();
+	#[cfg(target_os = "windows")]
+	Command::new("cmd")
+		.arg("/c")
+		.arg("start")
+		.arg(url)
+		.spawn()
+		.unwrap();
 }
