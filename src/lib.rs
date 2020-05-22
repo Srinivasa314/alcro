@@ -55,22 +55,25 @@ pub struct UI {
 }
 
 impl UI {
-    fn new(url: &str, dir: &str, width: i32, height: i32, custom_args: &[&str]) -> UI {
+    fn new(url: &str, dir: Option<&std::path::Path>, width: i32, height: i32, custom_args: &[&str]) -> UI {
         let _tmpdir:Option<tempdir::TempDir>;
-        let dir = if dir.is_empty() {
-            _tmpdir = Some(tempdir::TempDir::new("alcro").expect("Cannot create temp directory"));
-            _tmpdir.as_ref().unwrap().path().to_str().unwrap()
-        } else {
-            _tmpdir=None;
-            dir
-        };        
+        let dir = match dir {
+            Some(dir)=>{
+                _tmpdir=None;
+                dir
+            },
+            None=>{
+                _tmpdir = Some(tempdir::TempDir::new("alcro").expect("Cannot create temp directory"));
+                _tmpdir.as_ref().unwrap().path()
+            }
+        };       
 
         let mut args: Vec<String> = Vec::from(DEFAULT_CHROME_ARGS)
             .into_iter()
             .map(|s| s.to_string())
             .collect();
         args.push(format!("--app={}", url));
-        args.push(format!("--user-data-dir={}", dir));
+        args.push(format!("--user-data-dir={}", dir.to_str().unwrap()));
         args.push(format!("--window-size={},{}", width, height));
         for arg in custom_args {
             args.push(arg.to_string())
@@ -187,7 +190,7 @@ pub enum Content<'a> {
 /// Builder for constructing a UI instance.
 pub struct UIBuilder<'a> {
     content: Content<'a>,
-    dir: &'a str,
+    dir: Option<&'a std::path::Path>,
     width: i32,
     height: i32,
     custom_args: &'a [&'a str],
@@ -198,7 +201,7 @@ impl<'a> UIBuilder<'a> {
     pub fn new() -> Self {
         UIBuilder {
             content: Content::Html(""),
-            dir: "",
+            dir: None,
             width: 800,
             height: 600,
             custom_args: &[],
@@ -225,8 +228,8 @@ impl<'a> UIBuilder<'a> {
     }
 
     /// Set the user data directory. By default it is a temporary directory.
-    pub fn user_data_dir(&mut self, dir: &'a str) -> &mut Self {
-        self.dir = dir;
+    pub fn user_data_dir(&mut self, dir: &'a std::path::Path) -> &mut Self {
+        self.dir = Some(dir);
         self
     }
 
