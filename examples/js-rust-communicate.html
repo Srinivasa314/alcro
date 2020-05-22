@@ -1,15 +1,25 @@
 <html>
-    <head>
-        <title>JS Rust Communication</title>
-        <script>
-            async function callRust() {
-                let result=await addOne(8); //js calling rust
-                document.getElementById("result").innerText=result;
+
+<head>
+    <title>JS Rust Communication</title>
+    <script>
+        async function displayContents() {
+            try {
+                let contents = await readFile(document.getElementById('name').value)
+                document.getElementById('result').innerText = contents;
             }
-        </script>
-    </head>
-    <body>
-        <button onclick="callRust()">Call rust add_one function!</button>
-        <p id="result"></p>
-    </body>
+            catch (err) {
+                document.getElementById('result').innerText = "Error: " + err;
+            }
+        }
+    </script>
+</head>
+
+<body>
+    <h3 id="title">JS Rust Communication</h3>
+    File name: <input id="name">
+    <br> <br> <button onclick="displayContents()">Display content of file!</button>
+    <p id="result"></p>
+</body>
+
 </html>
