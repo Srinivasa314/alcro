@@ -1,8 +1,8 @@
 #[cfg(target_os = "windows")]
 use std::env::var;
 use std::path::Path;
-
-//TODO:Add other chrome-based browers(edge,..etc)
+pub use tinyfiledialogs;
+use tinyfiledialogs::{message_box_yes_no, MessageBoxIcon, YesNo};
 
 #[cfg(target_os = "macos")]
 const PATHS: &[&str] = &[
@@ -32,7 +32,7 @@ fn paths() -> &'static [&'static str] {
 #[cfg(target_os = "windows")]
 fn paths() -> [String; 7] {
 	return [
-		var("ProgramFiles(x86)").unwrap()+"/Microsoft/Edge/Application/msedge.exe",
+		var("ProgramFiles(x86)").unwrap() + "/Microsoft/Edge/Application/msedge.exe",
 		var("LocalAppData").unwrap() + "/Google/Chrome/Application/chrome.exe",
 		var("ProgramFiles").unwrap() + "/Google/Chrome/Application/chrome.exe",
 		var("ProgramFiles(x86)").unwrap() + "/Google/Chrome/Application/chrome.exe",
@@ -52,8 +52,6 @@ pub fn locate_chrome() -> String {
 	panic!("Chrome not found!");
 }
 
-mod messagebox;
-use messagebox::message_box;
 use std::process::Command;
 
 fn prompt_download() {
@@ -61,7 +59,7 @@ fn prompt_download() {
 	let text =
 		"No Chrome/Chromium installation was found. Would you like to download and install it now?";
 
-	if !message_box(title, text) {
+	if message_box_yes_no(title, text, MessageBoxIcon::Question, YesNo::Yes) == YesNo::No {
 		return;
 	}
 

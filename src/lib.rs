@@ -18,6 +18,7 @@ use chrome::{bind, bounds, close, eval, load, set_bounds, Chrome};
 pub use chrome::{Bounds, JSObject, JSResult, WindowState};
 mod locate;
 use locate::locate_chrome;
+pub use locate::tinyfiledialogs as dialog;
 use std::sync::Arc;
 
 const DEFAULT_CHROME_ARGS: &[&str] = &[
