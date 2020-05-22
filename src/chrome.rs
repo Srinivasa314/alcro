@@ -14,9 +14,9 @@ use devtools::{readloop, recv_msg_from_ws, send, send_msg_to_ws};
 
 /// A JS object
 pub type JSObject = serde_json::Value;
-/// The result of a JS function. 
+/// The result of a JS function.
 ///
-/// The Err variant will be returned if 
+/// The Err variant will be returned if
 /// * There is an exception
 /// * An error type is returned
 pub type JSResult = Result<JSObject, JSObject>;
@@ -50,8 +50,30 @@ pub struct Bounds {
     pub width: i32,
     /// height of the window
     pub height: i32,
-    /// "normal" "maximized" "minimized" or "fullscreen"
-    pub window_state: String,
+    pub window_state: WindowState,
+}
+
+/// The state of the window
+#[derive(Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum WindowState {
+    Normal,
+    Maximized,
+    Minimized,
+    Fullscreen,
+}
+
+impl WindowState {
+    /// Convert to Bounds struct
+    pub fn to_bounds(self) -> Bounds {
+        Bounds {
+            height: 0,
+            width: 0,
+            top: 0,
+            left: 0,
+            window_state: self,
+        }
+    }
 }
 
 impl Chrome {
@@ -245,19 +267,17 @@ pub fn eval(c: Arc<Chrome>, expr: &str) -> JSResult {
     );
 }
 
-pub fn set_bounds(c: Arc<Chrome>, mut b: Bounds) -> JSResult {
-    if b.window_state == "" {
-        b.window_state = "normal".to_string();
-    }
-    let mut param = json!({
+pub fn set_bounds(c: Arc<Chrome>, b: Bounds) -> JSResult {
+    let param = json!({
         "windowId": c.window,
-        "bounds": b
+        "bounds": if b.window_state != WindowState::Normal {
+            json!({
+                "windowState":b.window_state
+            })
+        }else {
+            serde_json::to_value(b).unwrap()
+        }
     });
-    if b.window_state != "normal" {
-        param["bounds"] = json!({
-            "windowState":b.window_state
-        });
-    }
     send(c, "Browser.setWindowBounds", &param)
 }
 

@@ -1,6 +1,6 @@
 #![windows_subsystem = "windows"]
-use alcro::{Bounds, Content, JSObject, JSResult, UIBuilder, UI};
-use serde_json::json;
+use alcro::{Content, JSObject, JSResult, UIBuilder, WindowState, UI};
+use serde_json::to_value;
 #[macro_use]
 extern crate lazy_static;
 
@@ -12,36 +12,16 @@ lazy_static! {
 
 fn window_details(_: &[JSObject]) -> JSResult {
     let bounds = ui.bounds().unwrap();
-    Ok(json!({
-        "x":bounds.left,
-        "y":bounds.top,
-        "height":bounds.height,
-        "width":bounds.width,
-        "state":bounds.window_state
-    }))
+    Ok(to_value(bounds).unwrap())
 }
 
 //Toggles between maximized and normal
 fn toggle(_: &[JSObject]) -> JSResult {
     let state = ui.bounds().unwrap().window_state;
-    if state == "maximized" {
-        ui.set_bounds(Bounds {
-            window_state: "normal".to_string(),
-            height: 0,
-            width: 0,
-            top: 0,
-            left: 0,
-        })
-        .unwrap();
-    } else if state == "normal" {
-        ui.set_bounds(Bounds {
-            window_state: "maximized".to_string(),
-            height: 0,
-            width: 0,
-            top: 0,
-            left: 0,
-        })
-        .unwrap();
+    if state == WindowState::Maximized {
+        ui.set_bounds(WindowState::Normal.to_bounds()).unwrap();
+    } else if state == WindowState::Normal {
+        ui.set_bounds(WindowState::Maximized.to_bounds()).unwrap();
     }
     Ok(JSObject::Null)
 }

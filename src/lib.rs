@@ -15,7 +15,7 @@
 
 mod chrome;
 use chrome::{bind, bounds, eval, load, set_bounds, Chrome};
-pub use chrome::{Bounds, JSObject, JSResult,BindingFunc};
+pub use chrome::{BindingFunc, Bounds, JSObject, JSResult, WindowState};
 mod locate;
 use locate::locate_chrome;
 use std::sync::Arc;
@@ -130,7 +130,7 @@ impl UI {
     ///     }
     ///     return Ok(to_value(sum).unwrap());
     /// }
-    /// 
+    ///
     /// let ui = UIBuilder::new().custom_args(&["--headless"]).run();
     /// ui.bind("add", add).unwrap();
     /// assert_eq!(ui.eval("(async () => await add(1,2,3))();").unwrap(), 6);
@@ -159,7 +159,7 @@ impl UI {
 
     /// It changes the size, position or state of the browser window specified by the `Bounds` struct. It returns Err if it fails.
     ///
-    /// If b.window_state is not "normal" the other fields are ignored
+    /// To change the window state alone use `WindowState::to_bounds()`
     pub fn set_bounds(&self, b: Bounds) -> JSResult {
         set_bounds(self.chrome.clone(), b)
     }
@@ -180,7 +180,7 @@ impl Drop for UI {
 
 /// Specifies the type of content shown by the browser
 pub enum Content<'a> {
-    /// The URL 
+    /// The URL
     Url(&'a str),
     /// HTML text
     Html(&'a str),

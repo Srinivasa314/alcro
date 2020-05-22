@@ -10,9 +10,9 @@
         function printDetails() {
             setInterval(async () => {
                 let details = await windowDetails();
-                $("coords").innerText = `x=${details.x} y=${details.y}`
+                $("coords").innerText = `x=${details.left} y=${details.top}`
                 $("size").innerText = `height=${details.height} y=${details.width}`
-                $("state").innerText = `state=${details.state}`
+                $("state").innerText = `state=${details.windowState}`
             }, 100);
         }
     </script>
