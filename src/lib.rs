@@ -2,6 +2,16 @@
 //!
 //! Alcro is a library to create desktop apps using rust and modern web technologies.
 //! It uses the existing chrome installation for the UI.
+//!
+//! # Example
+//!
+//! ```
+//! #![windows_subsystem = "windows"]
+//! use alcro::{UIBuilder, Content};
+//! let ui = UIBuilder::new().content(Content::Html("<html><body>Close Me!</body></html>")).run();
+//! assert_eq!(ui.eval("document.body.innerText").unwrap(), "Close Me!");
+//! ui.wait_finish();
+//! ```
 
 mod chrome;
 use chrome::{bind, bounds, eval, load, set_bounds, Chrome};
