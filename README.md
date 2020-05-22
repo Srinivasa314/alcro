@@ -25,7 +25,7 @@ Alcro works similarily to the go library [lorca](https://github.com/zserge/lorca
 
 ## Limitations
 * Requires Chrom(e/ium) to be installed
-* Native OS dialogs, systray, etc. needs third party libraries
+* Native systray, etc. needs third party crates
 
 ## Working
 Alcro uses the Chrome DevTools protocol and communicates with it via a websocket.
