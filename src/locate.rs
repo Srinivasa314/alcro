@@ -32,7 +32,7 @@ fn paths() -> &'static [&'static str] {
 #[cfg(target_os = "windows")]
 fn paths() -> [String; 7] {
 	return [
-		var("ProgramFiles(x86)").unwrap()+"Microsoft/Edge/Application/msedge.exe",
+		var("ProgramFiles(x86)").unwrap()+"/Microsoft/Edge/Application/msedge.exe",
 		var("LocalAppData").unwrap() + "/Google/Chrome/Application/chrome.exe",
 		var("ProgramFiles").unwrap() + "/Google/Chrome/Application/chrome.exe",
 		var("ProgramFiles(x86)").unwrap() + "/Google/Chrome/Application/chrome.exe",
