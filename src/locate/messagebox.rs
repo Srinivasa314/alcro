@@ -1,15 +1,29 @@
 #[cfg(target_os = "linux")]
 pub fn message_box(title: &str, text: &str) -> bool {
     use std::process::Command;
-    let status = Command::new("zenity")
+
+    match Command::new("zenity")
         .arg("--question")
         .arg("--title")
         .arg(title)
         .arg("--text")
         .arg(text)
         .status()
-        .expect("Failed to launch zenity");
-    return status.success();
+    {
+        Ok(status) => status.success(),
+        Err(_) => {
+            match Command::new("kdialog")
+            .arg("--title")
+            .arg(title)
+            .arg("--yesno")
+            .arg(text)
+            .status()
+            {
+                Ok(status) => status.success(),
+                Err(_) => false
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
