@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use crossbeam_channel::{bounded, Sender};
+use crossbeam_channel::Sender;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -30,7 +30,6 @@ pub struct Chrome {
     session: String,
     pending: Mutex<HashMap<i32, Sender<JSResult>>>,
     window: AtomicI32,
-    kill_send: Sender<()>,
     done: AtomicBool,
     bindings: Mutex<HashMap<String, BindingFunc>>,
 }
@@ -78,8 +77,6 @@ impl WindowState {
 
 impl Chrome {
     pub fn new_with_args(chrome_binary: &str, args: Vec<String>) -> Arc<Chrome> {
-        let (kill_send, kill_recv) = bounded(1);
-
         let mut c_cmd = Command::new(chrome_binary)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -116,7 +113,6 @@ impl Chrome {
             session: String::new(),
             window: AtomicI32::new(0),
             done: AtomicBool::new(false),
-            kill_send,
             pending: Mutex::new(HashMap::new()),
             bindings: Mutex::new(HashMap::new()),
         };
@@ -128,18 +124,9 @@ impl Chrome {
         let c_arc = Arc::new(c);
         let c_arc_clone = c_arc.clone();
 
-        std::thread::spawn(move || loop {
-            if c_cmd.try_wait().expect("Error in waiting").is_some() {
-                c_arc_clone.done.store(true, Ordering::SeqCst);
-                break;
-            } else if kill_recv.try_recv().is_ok() {
-                if let Ok(ws) = c_arc_clone.wssend.lock() {
-                    let _ = ws.shutdown_all();
-                }
-                let _ = c_cmd.kill();
-                c_arc_clone.done.store(true, Ordering::SeqCst);
-                break;
-            }
+        std::thread::spawn(move || {
+            c_cmd.wait().expect("Command not running");
+            c_arc_clone.done.store(true, Ordering::SeqCst);
         });
 
         let c_arc_clone = c_arc.clone();
@@ -222,12 +209,6 @@ impl Chrome {
                     return session["sessionId"].as_str().unwrap().to_string();
                 }
             }
-        }
-    }
-
-    pub fn kill(&self) {
-        if !self.done() {
-            self.kill_send.send(()).expect("Receiver end closed");
         }
     }
 
@@ -348,4 +329,14 @@ pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> JSResult {
         return Err(e);
     }
     return eval(Arc::clone(&c), &script);
+}
+
+pub fn close(c: Arc<Chrome>) {
+    send(c.clone(), "Browser.close", &json!({})).unwrap();
+    match c.wsrecv.lock() {
+        Ok(ws) => {
+            let _ = ws.shutdown_all();
+        }
+        Err(_) => {}
+    }
 }

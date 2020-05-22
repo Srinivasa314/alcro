@@ -14,7 +14,7 @@
 //! ```
 
 mod chrome;
-use chrome::{bind, bounds, eval, load, set_bounds, Chrome};
+use chrome::{bind, bounds, close, eval, load, set_bounds, Chrome};
 pub use chrome::{Bounds, JSObject, JSResult, WindowState};
 mod locate;
 use locate::locate_chrome;
@@ -55,18 +55,25 @@ pub struct UI {
 }
 
 impl UI {
-    fn new(url: &str, dir: Option<&std::path::Path>, width: i32, height: i32, custom_args: &[&str]) -> UI {
-        let _tmpdir:Option<tempdir::TempDir>;
+    fn new(
+        url: &str,
+        dir: Option<&std::path::Path>,
+        width: i32,
+        height: i32,
+        custom_args: &[&str],
+    ) -> UI {
+        let _tmpdir: Option<tempdir::TempDir>;
         let dir = match dir {
-            Some(dir)=>{
-                _tmpdir=None;
+            Some(dir) => {
+                _tmpdir = None;
                 dir
-            },
-            None=>{
-                _tmpdir = Some(tempdir::TempDir::new("alcro").expect("Cannot create temp directory"));
+            }
+            None => {
+                _tmpdir =
+                    Some(tempdir::TempDir::new("alcro").expect("Cannot create temp directory"));
                 _tmpdir.as_ref().unwrap().path()
             }
-        };       
+        };
 
         let mut args: Vec<String> = Vec::from(DEFAULT_CHROME_ARGS)
             .into_iter()
@@ -84,19 +91,19 @@ impl UI {
         UI { chrome, _tmpdir }
     }
 
-    /// Returns true if the browser is killed or closed
+    /// Returns true if the browser is closed
     pub fn done(&self) -> bool {
         return self.chrome.done();
     }
 
-    /// Wait for the user to close the browser window or for it to be killed
+    /// Wait for the browser to be closed
     pub fn wait_finish(&self) {
         self.chrome.wait_finish();
     }
 
     /// Close the browser window
     pub fn close(&self) {
-        self.chrome.kill()
+        close(self.chrome.clone())
     }
 
     /// Load a url in the browser. It returns Err if it fails.
@@ -173,7 +180,9 @@ impl UI {
 /// Closes the browser window
 impl Drop for UI {
     fn drop(&mut self) {
-        self.close();
+        if !self.done() {
+            self.close();
+        }
         self.wait_finish();
     }
 }
