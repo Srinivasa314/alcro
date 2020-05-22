@@ -12,7 +12,7 @@ use websocket::{sync::stream::TcpStream, ClientBuilder};
 mod devtools;
 use devtools::{readloop, recv_msg_from_ws, send, send_msg_to_ws};
 
-/// A JS object
+/// A JS object. It is an alias for `serde_json::Value`. See it's documentation for how to use it.
 pub type JSObject = serde_json::Value;
 /// The result of a JS function.
 ///

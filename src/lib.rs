@@ -109,7 +109,7 @@ impl UI {
     /// # Arguments
     ///
     /// * `name` - Name of the function
-    /// * `f` - The function
+    /// * `f` - The function. It should take a list of `JSObject` as argument and return a `JSResult`
     ///
     /// # Examples
     ///
