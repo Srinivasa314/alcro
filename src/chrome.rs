@@ -22,7 +22,7 @@ pub type JSObject = serde_json::Value;
 pub type JSResult = Result<JSObject, JSObject>;
 /// The function type used in `UI::bind`.
 /// It takes a list of JS objects and returns a `JSResult`.
-pub type BindingFunc = fn(&[JSObject]) -> JSResult;
+type BindingFunc = Arc<dyn Fn(&[JSObject]) -> JSResult + Sync + Send>;
 
 pub struct Chrome {
     id: AtomicI32,
@@ -41,6 +41,7 @@ pub struct Chrome {
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Bounds {
     /// x coordinate of the window
     pub left: i32,
@@ -54,8 +55,9 @@ pub struct Bounds {
 }
 
 /// The state of the window
-#[derive(Serialize, Deserialize, PartialEq)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum WindowState {
     Normal,
     Maximized,
@@ -300,11 +302,7 @@ pub fn bounds(c: Arc<Chrome>) -> Result<Bounds, JSObject> {
 pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> JSResult {
     {
         let mut bindings = c.bindings.lock().unwrap();
-        if bindings.contains_key(name) {
-            return Ok(JSObject::Null);
-        } else {
-            bindings.insert(name.to_string(), f);
-        }
+        bindings.insert(name.to_string(), f);
     }
 
     if let Err(e) = send(

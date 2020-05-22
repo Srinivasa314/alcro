@@ -11,7 +11,7 @@
             setInterval(async () => {
                 let details = await windowDetails();
                 $("coords").innerText = `x=${details.left} y=${details.top}`
-                $("size").innerText = `height=${details.height} y=${details.width}`
+                $("size").innerText = `height=${details.height} width=${details.width}`
                 $("state").innerText = `state=${details.windowState}`
             }, 100);
         }
@@ -19,10 +19,10 @@
 </head>
 
 <body>
-    To change the values below move, resize, maximize ,...etc the window <br>
+    To change the values below move, resize, maximize, ...etc the window <br>
     <span id="coords"></span><br>
     <span id="size"></span><br>
-    <span id="state"></span><br>
+    <span id="state"></span><br><br>
     <button onclick="toggle()">Toggle Normal/Maximized</button>
 </body>
 

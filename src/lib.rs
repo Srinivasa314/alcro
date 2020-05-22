@@ -15,7 +15,7 @@
 
 mod chrome;
 use chrome::{bind, bounds, eval, load, set_bounds, Chrome};
-pub use chrome::{BindingFunc, Bounds, JSObject, JSResult, WindowState};
+pub use chrome::{Bounds, JSObject, JSResult, WindowState};
 mod locate;
 use locate::locate_chrome;
 use std::sync::Arc;
@@ -56,18 +56,14 @@ pub struct UI {
 
 impl UI {
     fn new(url: &str, dir: &str, width: i32, height: i32, custom_args: &[&str]) -> UI {
-        let _tmpdir = if dir.is_empty() {
-            let t = tempdir::TempDir::new("alcro").expect("Cannot create temp directory");
-            Some(t)
-        } else {
-            None
-        };
-
+        let _tmpdir:Option<tempdir::TempDir>;
         let dir = if dir.is_empty() {
+            _tmpdir = Some(tempdir::TempDir::new("alcro").expect("Cannot create temp directory"));
             _tmpdir.as_ref().unwrap().path().to_str().unwrap()
         } else {
+            _tmpdir=None;
             dir
-        };
+        };        
 
         let mut args: Vec<String> = Vec::from(DEFAULT_CHROME_ARGS)
             .into_iter()
@@ -116,10 +112,11 @@ impl UI {
     ///
     /// ```
     /// #![windows_subsystem = "windows"]
-    /// use alcro::{JSObject, JSResult, UIBuilder};
+    /// use alcro::UIBuilder;
     /// use serde_json::to_value;
     ///
-    /// fn add(args: &[JSObject]) -> JSResult {
+    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run();
+    /// ui.bind("add", |args| {
     ///     let mut sum = 0;
     ///     for arg in args {
     ///         if arg.is_i64() {
@@ -128,16 +125,16 @@ impl UI {
     ///             return Err(to_value("Not a number").unwrap());
     ///         }
     ///     }
-    ///     return Ok(to_value(sum).unwrap());
-    /// }
-    ///
-    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run();
-    /// ui.bind("add", add).unwrap();
+    ///     Ok(to_value(sum).unwrap())
+    /// }).unwrap();
     /// assert_eq!(ui.eval("(async () => await add(1,2,3))();").unwrap(), 6);
     /// assert!(ui.eval("(async () => await add(1,2,'hi'))();").is_err());
     /// ```
-    pub fn bind(&self, name: &str, f: BindingFunc) -> JSResult {
-        bind(self.chrome.clone(), name, f)
+    pub fn bind<F>(&self, name: &str, f: F) -> JSResult
+    where
+        F: Fn(&[JSObject]) -> JSResult + Sync + Send + 'static,
+    {
+        bind(self.chrome.clone(), name, Arc::new(f))
     }
 
     /// Evaluates js code and returns the result.
@@ -179,6 +176,7 @@ impl Drop for UI {
 }
 
 /// Specifies the type of content shown by the browser
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum Content<'a> {
     /// The URL
     Url(&'a str),

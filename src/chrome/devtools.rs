@@ -132,13 +132,12 @@ fn binding_called(c: Arc<Chrome>, name: &str, payload: JSObject, context_id: Opt
     {
         let bindings = c.bindings.lock().unwrap();
         binding = match bindings.get(name) {
-            Some(b) => Some(*b),
+            Some(b) => Some(Arc::clone(b)),
             None => None,
         }
     }
 
     if let Some(binding) = binding {
-        let binding = binding.clone();
         let c = Arc::clone(&c);
         std::thread::spawn(move || {
             let result: Result<String, String> = match binding(payload["args"].as_array().unwrap())
