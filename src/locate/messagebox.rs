@@ -1,7 +1,6 @@
-use std::process::Command;
-
 #[cfg(target_os = "linux")]
 pub fn message_box(title: &str, text: &str) -> bool {
+    use std::process::Command;
     let status = Command::new("zenity")
         .arg("--question")
         .arg("--title")
@@ -15,6 +14,7 @@ pub fn message_box(title: &str, text: &str) -> bool {
 
 #[cfg(target_os = "macos")]
 pub fn message_box(title: &str, text: &str) -> bool {
+    use std::process::Command;
     let buttons = "{\"No\", \"Yes\"}";
     let script=format!("set T to button returned of (display dialog {} with title {} buttons {} default button \"Yes\")",text,title,buttons);
     let cmd = Command::new("osascript")

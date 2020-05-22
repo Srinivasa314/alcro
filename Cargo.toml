@@ -23,5 +23,10 @@ actix-web = "^1"
 actix-rt = "^0"
 rust-embed = "^5"
 mime_guess = "^2"
-futures = "^0"
 lazy_static = "^1"
+
+[target.'cfg(windows)'.dev-dependencies]
+futures = "^0.1"
+
+[target.'cfg(unix)'.dev-dependencies]
+futures = "^0"

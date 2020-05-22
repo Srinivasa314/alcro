@@ -105,6 +105,7 @@ impl UI {
     /// # Examples
     ///
     /// ```
+    /// #![windows_subsystem = "windows"]
     /// use alcro::{JSObject, JSResult, UIBuilder};
     /// use serde_json::to_value;
     ///
@@ -134,6 +135,7 @@ impl UI {
     /// # Examples
     ///
     /// ```
+    /// #![windows_subsystem = "windows"]
     /// use alcro::UIBuilder;
     /// let ui = UIBuilder::new().custom_args(&["--headless"]).run();
     /// assert_eq!(ui.eval("1+1").unwrap(), 2);
