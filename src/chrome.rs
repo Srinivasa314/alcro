@@ -20,8 +20,6 @@ pub type JSObject = serde_json::Value;
 /// * There is an exception
 /// * An error type is returned
 pub type JSResult = Result<JSObject, JSObject>;
-/// The function type used in `UI::bind`.
-/// It takes a list of JS objects and returns a `JSResult`.
 type BindingFunc = Arc<dyn Fn(&[JSObject]) -> JSResult + Sync + Send>;
 
 pub struct Chrome {
