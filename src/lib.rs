@@ -107,8 +107,16 @@ impl UI {
         close(self.chrome.clone())
     }
 
-    /// Load a url in the browser. It returns Err if it fails.
-    pub fn load(&self, url: &str) -> JSResult {
+    /// Load content in the browser. It returns Err if it fails.
+    pub fn load(&self, content: Content) -> JSResult {
+        let html: String;
+        let url = match content {
+            Content::Url(u) => u,
+            Content::Html(h) => {
+                html = format!("data:text/html,{}", h);
+                &html
+            }
+        };
         return load(self.chrome.clone(), url);
     }
 
