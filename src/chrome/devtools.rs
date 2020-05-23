@@ -27,6 +27,7 @@ pub fn readloop(c: Arc<Chrome>) {
 
                 if wsmsg["method"] == "Target.targetDestroyed" {
                     if wsmsg["params"]["targetId"] == c.target {
+                        let _ = c.kill_send.send(());
                         return;
                     }
                 } else if wsmsg["method"] == "Target.receivedMessageFromTarget" {
