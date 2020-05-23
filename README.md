@@ -1,6 +1,6 @@
 # Alcro
 
-[crates.io]: https://crates.io/crates/alcro
+[![Crates.io](https://img.shields.io/crates/v/alcro)](https://crates.io/crates/alcro)
 
 A small library to build desktop apps using rust and modern web technologies. It uses Chrom(e/ium) browser for UI. It does not bundle chrome but instead communicates with the existing chrome installation.
 Thus rust functions can be called from the UI and javascript can be called Rust.
