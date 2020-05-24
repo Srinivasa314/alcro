@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use crossbeam_channel::Sender;
+use crossbeam_channel::{bounded, Sender};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -28,6 +28,7 @@ pub struct Chrome {
     wsrecv: Mutex<websocket::receiver::Reader<TcpStream>>,
     target: String,
     session: String,
+    kill_send: Sender<()>,
     pending: Mutex<HashMap<i32, Sender<JSResult>>>,
     window: AtomicI32,
     done: AtomicBool,
@@ -105,6 +106,7 @@ impl Chrome {
             .unwrap();
         let (receiver, sender) = client.split().unwrap();
 
+        let (kill_send, kill_recv) = bounded(1);
         let mut c = Chrome {
             id: AtomicI32::new(2),
             wsrecv: Mutex::new(receiver),
@@ -115,6 +117,7 @@ impl Chrome {
             done: AtomicBool::new(false),
             pending: Mutex::new(HashMap::new()),
             bindings: Mutex::new(HashMap::new()),
+            kill_send,
         };
 
         c.target = c.find_target();
@@ -124,9 +127,16 @@ impl Chrome {
         let c_arc = Arc::new(c);
         let c_arc_clone = c_arc.clone();
 
-        std::thread::spawn(move || {
-            c_cmd.wait().expect("Command not running");
-            c_arc_clone.done.store(true, Ordering::SeqCst);
+        std::thread::spawn(move || loop {
+            if c_cmd.try_wait().unwrap().is_some() {
+                c_arc_clone.done.store(true, Ordering::SeqCst);
+                break;
+            }
+            if kill_recv.try_recv().is_ok() {
+                let _ = c_cmd.kill();
+                c_arc_clone.done.store(true, Ordering::SeqCst);
+                break;
+            }
         });
 
         let c_arc_clone = c_arc.clone();
