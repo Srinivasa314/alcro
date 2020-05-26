@@ -1,7 +1,7 @@
 use libc::*;
 use std::ptr::null_mut as NULL;
 
-const BUFSIZE: usize = 16;
+const BUFSIZE: usize = 256;
 
 pub struct PipeWriter {
     fd: c_int,
