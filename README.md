@@ -28,4 +28,4 @@ Alcro works similarily to the go library [lorca](https://github.com/zserge/lorca
 * Native systray, etc. needs third party crates
 
 ## Working
-Alcro uses the Chrome DevTools protocol and communicates with it via a websocket.
+Alcro uses the Chrome DevTools protocol and communicates with it via a pipe.

@@ -1,76 +1,62 @@
 use super::{BindingFunc, Chrome, JSObject, JSResult};
+use super::{PipeReader, PipeWriter};
 use crossbeam_channel::{bounded, Sender};
 use serde_json::json;
 use std::sync::{atomic::Ordering, Arc, Mutex};
-use websocket::{sync::stream::TcpStream, Message, OwnedMessage};
 
-pub fn send_msg_to_ws(ws: &Mutex<websocket::sender::Writer<TcpStream>>, message: &str) {
-    ws.lock()
-        .expect("Unable to lock")
-        .send_message(&Message::text(message))
-        .expect("Unable to send message");
+pub fn send_msg(p: &Mutex<PipeWriter>, message: String) {
+    p.lock().expect("Unable to lock").write(message);
 }
 
-pub fn recv_msg_from_ws(ws: &Mutex<websocket::receiver::Reader<TcpStream>>) -> Option<String> {
-    match ws.lock().expect("Unable to lock").recv_message() {
-        Ok(OwnedMessage::Text(t)) => Some(t),
-        Ok(_) => panic!("Received non UTF8 data"),
-        Err(_) => None,
-    }
+pub fn recv_msg(p: &Mutex<PipeReader>) -> String {
+    p.lock().expect("Unable to lock").read()
 }
 
 pub fn readloop(c: Arc<Chrome>) {
     loop {
-        match recv_msg_from_ws(&c.wsrecv) {
-            Some(wsmsg) => {
-                let wsmsg: JSObject = serde_json::from_str(&wsmsg).unwrap();
+        let pmsg=recv_msg(&c.precv);
+        let pmsg: JSObject = serde_json::from_str(&pmsg).unwrap();
 
-                if wsmsg["method"] == "Target.targetDestroyed" {
-                    if wsmsg["params"]["targetId"] == c.target {
-                        let _ = c.kill_send.send(());
-                        return;
-                    }
-                } else if wsmsg["method"] == "Target.receivedMessageFromTarget" {
-                    let params = &wsmsg["params"];
-                    if params["sessionId"] != c.session {
-                        continue;
-                    }
+        if pmsg["method"] == "Target.targetDestroyed" {
+            if pmsg["params"]["targetId"] == c.target {
+                let _ = c.kill_send.send(());
+                return;
+            }
+        } else if pmsg["method"] == "Target.receivedMessageFromTarget" {
+            let params = &pmsg["params"];
+            if params["sessionId"] != c.session {
+                continue;
+            }
 
-                    let message = params["message"].as_str().unwrap();
-                    let res: JSObject = serde_json::from_str(message).unwrap();
+            let message = params["message"].as_str().unwrap();
+            let res: JSObject = serde_json::from_str(message).unwrap();
 
-                    if res["id"] == JSObject::Null && res["method"] == "Runtime.consoleAPICalled"
-                        || res["method"] == "Runtime.exceptionThrown"
-                    {
-                        println!("Message: {}", res);
-                    } else if res["id"] == JSObject::Null
-                        && res["method"] == "Runtime.bindingCalled"
-                    {
-                        let payload: JSObject =
-                            serde_json::from_str(res["params"]["payload"].as_str().unwrap())
-                                .unwrap();
-                        binding_called(
-                            c.clone(),
-                            res["params"]["name"].as_str().unwrap(),
-                            payload,
-                            res["params"]["executionContextId"].as_i64(),
-                        );
-                        continue;
-                    } else if res["id"].is_i64() {
-                        let mut pending = c.pending.lock().unwrap();
-                        let res_id = res["id"].as_i64().unwrap() as i32;
+            if res["id"] == JSObject::Null && res["method"] == "Runtime.consoleAPICalled"
+                || res["method"] == "Runtime.exceptionThrown"
+            {
+                println!("Message: {}", res);
+            } else if res["id"] == JSObject::Null && res["method"] == "Runtime.bindingCalled" {
+                let payload: JSObject =
+                    serde_json::from_str(res["params"]["payload"].as_str().unwrap()).unwrap();
+                binding_called(
+                    c.clone(),
+                    res["params"]["name"].as_str().unwrap(),
+                    payload,
+                    res["params"]["executionContextId"].as_i64(),
+                );
+                continue;
+            } else if res["id"].is_i64() {
+                let mut pending = c.pending.lock().unwrap();
+                let res_id = res["id"].as_i64().unwrap() as i32;
 
-                        match pending.get(&res_id) {
-                            None => continue,
-                            Some(reschan) => {
-                                send_result(reschan, &res);
-                            }
-                        }
-                        pending.remove(&res_id);
+                match pending.get(&res_id) {
+                    None => continue,
+                    Some(reschan) => {
+                        send_result(reschan, &res);
                     }
                 }
+                pending.remove(&res_id);
             }
-            None => return,
         }
     }
 }
@@ -87,9 +73,9 @@ pub fn send(c: Arc<Chrome>, method: &str, params: &JSObject) -> JSResult {
         c.pending.lock().unwrap().insert(id, s);
     };
 
-    send_msg_to_ws(
-        &c.wssend,
-        &json!({
+    send_msg(
+        &c.psend,
+        json!({
             "id":id,
             "method":"Target.sendMessageToTarget",
             "params":json!({

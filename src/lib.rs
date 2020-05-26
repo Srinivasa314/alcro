@@ -103,9 +103,9 @@ impl UI {
         for arg in custom_args {
             args.push(arg.to_string())
         }
-        args.push("--remote-debugging-port=0".to_string());
+        args.push("--remote-debugging-pipe".to_string());
 
-        let chrome = Chrome::new_with_args(&locate_chrome(), args);
+        let chrome = Chrome::new_with_args(locate_chrome(), args);
         UI { chrome, _tmpdir }
     }
 
