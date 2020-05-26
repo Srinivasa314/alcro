@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 mod devtools;
 use devtools::{readloop, recv_msg, send, send_msg};
 mod pipe;
-use pipe::{exited, kill_proc, new_process, PipeReader, PipeWriter};
+use pipe::{exited, kill_proc, new_process, PipeReader, PipeWriter,pid_t};
 
 /// A JS object. It is an alias for `serde_json::Value`. See it's documentation for how to use it.
 pub type JSObject = serde_json::Value;
@@ -78,6 +78,7 @@ impl WindowState {
 impl Chrome {
     pub fn new_with_args(chrome_binary: String, mut args: Vec<String>) -> Arc<Chrome> {
         let (pid, precv, psend) = new_process(chrome_binary, &mut args);
+        let pid = pid as usize;
         let (kill_send, kill_recv) = bounded(1);
 
         let mut c = Chrome {
@@ -100,12 +101,12 @@ impl Chrome {
         let c_arc_clone = c_arc.clone();
 
         std::thread::spawn(move || loop {
-            if exited(pid) {
+            if exited(pid as pid_t) {
                 c_arc_clone.done.store(true, Ordering::SeqCst);
                 break;
             }
             if kill_recv.try_recv().is_ok() {
-                kill_proc(pid);
+                kill_proc(pid as pid_t);
                 c_arc_clone.done.store(true, Ordering::SeqCst);
                 break;
             }

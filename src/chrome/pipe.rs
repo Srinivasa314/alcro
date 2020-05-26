@@ -8,20 +8,16 @@ pub struct PipeWriter {
 }
 
 #[cfg(target_family = "unix")]
-type write_size = size_t;
+type size = size_t;
 
 #[cfg(target_family = "windows")]
-type write_size = c_uint;
+type size = c_uint;
 
 impl PipeWriter {
     pub fn write(&mut self, mut msg: String) {
         msg.push('\0');
         unsafe {
-            write(
-                self.fd,
-                msg.as_ptr() as *const c_void,
-                msg.len() as write_size,
-            );
+            write(self.fd, msg.as_ptr() as *const c_void, msg.len() as size);
         }
     }
 
@@ -55,7 +51,7 @@ impl PipeReader {
         loop {
             let nbytes;
             unsafe {
-                nbytes = read(self.fd, resbuf.as_mut_ptr() as *mut c_void, BUFSIZE);
+                nbytes = read(self.fd, resbuf.as_mut_ptr() as *mut c_void, BUFSIZE as size);
             }
             if nbytes == 0 {
                 break;
@@ -84,7 +80,7 @@ impl PipeReader {
 }
 
 #[cfg(target_family = "unix")]
-type pid_t = libc::pid_t;
+pub type pid_t = libc::pid_t;
 
 #[cfg(target_family = "unix")]
 pub fn new_process(mut path: String, args: &mut [String]) -> (pid_t, PipeReader, PipeWriter) {
@@ -172,28 +168,45 @@ const FPIPE: u8 = 0x08;
 #[cfg(target_family = "windows")]
 const FDEV: u8 = 0x40;
 #[cfg(target_family = "windows")]
-type pid_t = HANDLE;
+pub type pid_t = HANDLE;
+
+#[cfg(target_family = "windows")]
+use os_str_bytes::OsStrBytes;
+#[cfg(target_family = "windows")]
+use std::ffi::{OsStr, OsString};
+#[cfg(target_family = "windows")]
+use std::os::windows::ffi::OsStrExt;
 
 #[cfg(target_family = "windows")]
 fn L(string: &str) -> Vec<u16> {
-    use std::ffi::OsStr;
     use std::iter::once;
     OsStr::new(string).encode_wide().chain(once(0)).collect()
 }
 
 #[cfg(target_family = "windows")]
-pub fn new_process(path: String, args: &mut [String]) -> (pid_t, PipeReader, PipeWriter) {
-    use std::mem::*;
-    use winapi::shared::minwindef::{TRUE, *};
-    use winapi::shared::{basetsd::*, ntdef::HANDLE};
-    use winapi::um::fileapi::*;
-    use winapi::um::handleapi::*;
-    use winapi::um::minwinbase::*;
-    use winapi::um::namedpipeapi::*;
-    use winapi::um::processthreadsapi::*;
-    use winapi::um::winbase::*;
-    use winapi::um::winnt::*;
+use std::mem::*;
+#[cfg(target_family = "windows")]
+use winapi::shared::minwindef::{TRUE, *};
+#[cfg(target_family = "windows")]
+use winapi::shared::{basetsd::*, ntdef::HANDLE};
+#[cfg(target_family = "windows")]
+use winapi::um::fileapi::*;
+#[cfg(target_family = "windows")]
+use winapi::um::handleapi::*;
+#[cfg(target_family = "windows")]
+use winapi::um::minwinbase::*;
+#[cfg(target_family = "windows")]
+use winapi::um::namedpipeapi::*;
+#[cfg(target_family = "windows")]
+use winapi::um::processthreadsapi::*;
 
+#[cfg(target_family = "windows")]
+use winapi::um::winbase::*;
+#[cfg(target_family = "windows")]
+use winapi::um::winnt::*;
+
+#[cfg(target_family = "windows")]
+pub fn new_process(path: String, args: &mut [String]) -> (pid_t, PipeReader, PipeWriter) {
     unsafe {
         let size_sa = size_of::<SECURITY_ATTRIBUTES>() as u32;
         let mut sa = SECURITY_ATTRIBUTES {
@@ -274,13 +287,12 @@ pub fn new_process(path: String, args: &mut [String]) -> (pid_t, PipeReader, Pip
         startupinfo.StartupInfo.cbReserved2 = size_of::<StdioBuffer5>() as u16;
         startupinfo.StartupInfo.lpReserved2 = &mut stdio_buffer as *mut StdioBuffer5 as LPBYTE;
 
-        let mut child_cmd: String = path.clone();
-        for arg in args {
-            child_cmd.push_str(&format!(" {}", arg));
-        }
+        let args: Vec<OsString> = args.iter().map(|s| OsString::from(s)).collect();
+        let mut cmd_str = make_command_line(&OsString::from(&path), &args).unwrap();
+        cmd_str.push(0);
         CreateProcessW(
-            L(&path).as_mut_ptr(),
-            L(&child_cmd).as_mut_ptr(),
+            NULL(),
+            cmd_str.as_mut_ptr(),
             NULL(),
             NULL(),
             TRUE,
@@ -303,13 +315,18 @@ pub fn new_process(path: String, args: &mut [String]) -> (pid_t, PipeReader, Pip
 
 #[cfg(target_family = "windows")]
 pub fn kill_proc(pid: pid_t) {
-    TerminateProcess(hproc, 0);
-    CloseHandle(hproc);
+    unsafe {
+        TerminateProcess(pid, 0);
+        CloseHandle(pid);
+    }
 }
 
 #[cfg(target_family = "windows")]
 pub fn exited(pid: pid_t) -> bool {
-    return WaitForSingleObject(hproc, 0) == WAIT_OBJECT_0;
+    use winapi::um::synchapi::WaitForSingleObject;
+    unsafe {
+        return WaitForSingleObject(pid, 0) == WAIT_OBJECT_0;
+    }
 }
 
 #[cfg(target_family = "unix")]
@@ -317,5 +334,70 @@ pub fn exited(pid: pid_t) -> bool {
     let mut status = 0;
     unsafe {
         return waitpid(pid, &mut status, WNOHANG) != 0;
+    }
+}
+
+#[cfg(target_family = "windows")]
+use std::io::{self, ErrorKind};
+
+#[cfg(target_family = "windows")]
+fn make_command_line(prog: &OsStr, args: &[OsString]) -> io::Result<Vec<u16>> {
+    // Encode the command and arguments in a command line string such
+    // that the spawned process may recover them using CommandLineToArgvW.
+    let mut cmd: Vec<u16> = Vec::new();
+    // Always quote the program name so CreateProcess doesn't interpret args as
+    // part of the name if the binary wasn't found first time.
+    append_arg(&mut cmd, prog, true)?;
+    for arg in args {
+        cmd.push(' ' as u16);
+        append_arg(&mut cmd, arg, false)?;
+    }
+    return Ok(cmd);
+
+    fn append_arg(cmd: &mut Vec<u16>, arg: &OsStr, force_quotes: bool) -> io::Result<()> {
+        // If an argument has 0 characters then we need to quote it to ensure
+        // that it actually gets passed through on the command line or otherwise
+        // it will be dropped entirely when parsed on the other end.
+        ensure_no_nuls(arg)?;
+        let arg_bytes = &arg.to_bytes();
+        let quote = force_quotes
+            || arg_bytes.iter().any(|c| *c == b' ' || *c == b'\t')
+            || arg_bytes.is_empty();
+        if quote {
+            cmd.push('"' as u16);
+        }
+
+        let mut backslashes: usize = 0;
+        for x in arg.encode_wide() {
+            if x == '\\' as u16 {
+                backslashes += 1;
+            } else {
+                if x == '"' as u16 {
+                    // Add n+1 backslashes to total 2n+1 before internal '"'.
+                    cmd.extend((0..=backslashes).map(|_| '\\' as u16));
+                }
+                backslashes = 0;
+            }
+            cmd.push(x);
+        }
+
+        if quote {
+            // Add n backslashes to total 2n before ending '"'.
+            cmd.extend((0..backslashes).map(|_| '\\' as u16));
+            cmd.push('"' as u16);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_family = "windows")]
+fn ensure_no_nuls<T: AsRef<OsStr>>(str: T) -> io::Result<T> {
+    if str.as_ref().encode_wide().any(|b| b == 0) {
+        Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "nul byte found in provided data",
+        ))
+    } else {
+        Ok(str)
     }
 }
