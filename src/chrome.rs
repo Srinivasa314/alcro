@@ -121,7 +121,6 @@ impl Chrome {
         };
 
         c.target = c.find_target();
-        c.start_session();
         c.session = c.start_session();
 
         let c_arc = Arc::new(c);
@@ -208,16 +207,14 @@ impl Chrome {
         );
 
         loop {
-            loop {
-                let wsmsg: JSObject =
-                    serde_json::from_str(&recv_msg_from_ws(&self.wsrecv).unwrap()).unwrap();
-                if wsmsg["id"] == 1 {
-                    if wsmsg["error"] != JSObject::Null {
-                        panic!(wsmsg["error"].to_string())
-                    }
-                    let session = &wsmsg["result"];
-                    return session["sessionId"].as_str().unwrap().to_string();
+            let wsmsg: JSObject =
+                serde_json::from_str(&recv_msg_from_ws(&self.wsrecv).unwrap()).unwrap();
+            if wsmsg["id"] == 1 {
+                if wsmsg["error"] != JSObject::Null {
+                    panic!(wsmsg["error"].to_string())
                 }
+                let session = &wsmsg["result"];
+                return session["sessionId"].as_str().unwrap().to_string();
             }
         }
     }
