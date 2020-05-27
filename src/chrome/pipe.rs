@@ -125,9 +125,9 @@ pub fn new_process(mut path: String, args: &mut [String]) -> (pid_t, PipeReader,
             let null_read = open(dev_null_path.as_ptr(), O_RDONLY);
             let null_write = open(dev_null_path.as_ptr(), O_WRONLY);
 
-            //dup2(null_read, 0);
-            //dup2(null_write, 1);
-            //dup2(null_write, 2);
+            dup2(null_read, 0);
+            dup2(null_write, 1);
+            dup2(null_write, 2);
             dup2(pipe3[READ_END], 3);
             dup2(pipe4[WRITE_END], 4);
         }
