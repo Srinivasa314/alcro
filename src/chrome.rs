@@ -197,7 +197,9 @@ impl Chrome {
     }
 
     pub fn wait_finish(&self) {
-        while !self.done() {}
+        while !self.done() {
+            std::thread::sleep(std::time::Duration::from_millis(1))
+        }
     }
 }
 
