@@ -32,3 +32,5 @@ Alcro works similarily to the go library [lorca](https://github.com/zserge/lorca
 
 ## Working
 Alcro uses the Chrome DevTools protocol and communicates with it via a websocket.
+### Note:
+To use pipes instead of websocket switch to the pipe branch. As of now headless chrome does not work.
