@@ -1,7 +1,7 @@
 use libc::*;
 use std::ptr::null_mut as NULL;
 
-const BUFSIZE: usize = 256;
+const BUFSIZE: usize = 1024;
 
 pub struct PipeWriter {
     fd: c_int,
@@ -42,23 +42,30 @@ impl PipeReader {
     pub fn read(&mut self) -> String {
         let mut resbuf: [u8; BUFSIZE] = [0; BUFSIZE];
         let mut s: Vec<u8> = vec![];
+        let mut nbytes = 0;
 
         if !self.extra_buffer.is_empty() {
-            s.append(&mut self.extra_buffer);
-            self.extra_buffer.clear();
+            for i in 0..self.extra_buffer.len()
+            {
+            resbuf[i]=self.extra_buffer[i];
+            }
+            nbytes = self.extra_buffer.len();
         }
 
         loop {
-            let nbytes;
-            unsafe {
-                nbytes = read(self.fd, resbuf.as_mut_ptr() as *mut c_void, BUFSIZE as size);
+            if self.extra_buffer.is_empty() {
+                unsafe {
+                    nbytes =
+                        read(self.fd, resbuf.as_mut_ptr() as *mut c_void, BUFSIZE as size) as usize;
+                }
+            } else {
+                self.extra_buffer.clear();
             }
             if nbytes == 0 {
                 break;
             }
             let mut null_found = false;
             let mut len = nbytes;
-
             for i in 0..nbytes {
                 if resbuf[i as usize] == 0 {
                     len = i;
@@ -118,9 +125,9 @@ pub fn new_process(mut path: String, args: &mut [String]) -> (pid_t, PipeReader,
             let null_read = open(dev_null_path.as_ptr(), O_RDONLY);
             let null_write = open(dev_null_path.as_ptr(), O_WRONLY);
 
-            dup2(null_read, 0);
-            dup2(null_write, 1);
-            dup2(null_write, 2);
+            //dup2(null_read, 0);
+            //dup2(null_write, 1);
+            //dup2(null_write, 2);
             dup2(pipe3[READ_END], 3);
             dup2(pipe4[WRITE_END], 4);
         }

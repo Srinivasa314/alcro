@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 mod devtools;
 use devtools::{readloop, recv_msg, send, send_msg};
 mod pipe;
-use pipe::{exited, kill_proc, new_process, PipeReader, PipeWriter,pid_t};
+use pipe::{exited, kill_proc, new_process, pid_t, PipeReader, PipeWriter};
 
 /// A JS object. It is an alias for `serde_json::Value`. See it's documentation for how to use it.
 pub type JSObject = serde_json::Value;
@@ -153,8 +153,7 @@ impl Chrome {
         );
 
         loop {
-            let pmsg: JSObject =
-                serde_json::from_str(&recv_msg(&self.precv)).unwrap();
+            let pmsg: JSObject = serde_json::from_str(&recv_msg(&self.precv)).unwrap();
             if pmsg["method"] == "Target.targetCreated" {
                 let params = &pmsg["params"];
                 if params["targetInfo"]["type"] == "page" {
@@ -180,17 +179,16 @@ impl Chrome {
             .to_string(),
         );
 
-            loop {
-                let pmsg: JSObject =
-                    serde_json::from_str(&recv_msg(&self.precv)).unwrap();
-                if pmsg["id"] == 1 {
-                    if pmsg["error"] != JSObject::Null {
-                        panic!(pmsg["error"].to_string())
-                    }
-                    let session = &pmsg["result"];
-                    return session["sessionId"].as_str().unwrap().to_string();
+        loop {
+            let pmsg: JSObject = serde_json::from_str(&recv_msg(&self.precv)).unwrap();
+            if pmsg["id"] == 1 {
+                if pmsg["error"] != JSObject::Null {
+                    panic!(pmsg["error"].to_string())
                 }
+                let session = &pmsg["result"];
+                return session["sessionId"].as_str().unwrap().to_string();
             }
+        }
     }
 
     pub fn done(&self) -> bool {
