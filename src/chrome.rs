@@ -136,6 +136,7 @@ impl Chrome {
                 c_arc_clone.done.store(true, Ordering::SeqCst);
                 break;
             }
+            std::thread::sleep(std::time::Duration::from_millis(1))
         });
 
         let c_arc_clone = c_arc.clone();
