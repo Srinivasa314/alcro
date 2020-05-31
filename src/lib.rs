@@ -9,7 +9,7 @@
 //! #![windows_subsystem = "windows"]
 //! use alcro::{UIBuilder, Content};
 //! use serde_json::to_value;
-//! 
+//!
 //! let ui = UIBuilder::new().content(Content::Html("<html><body>Close Me!</body></html>")).run();
 //! assert_eq!(ui.eval("document.body.innerText").unwrap(), "Close Me!");
 //!
@@ -26,7 +26,7 @@
 //! });
 //!
 //! assert_eq!(ui.eval("(async () => await product(1,2,3))();").unwrap(), 6);
-//! assert!(ui.eval("(async () => await product(1,2,'hi'))();").is_err()); 
+//! assert!(ui.eval("(async () => await product(1,2,'hi'))();").is_err());
 //! ui.wait_finish();
 //! ```
 
@@ -97,13 +97,18 @@ impl UI {
             .into_iter()
             .map(|s| s.to_string())
             .collect();
-        args.push(format!("--app={}", url));
         args.push(format!("--user-data-dir={}", dir.to_str().unwrap()));
         args.push(format!("--window-size={},{}", width, height));
         for arg in custom_args {
             args.push(arg.to_string())
         }
         args.push("--remote-debugging-pipe".to_string());
+
+        if custom_args.contains(&"--headless") {
+            args.push(url.to_string());
+        } else {
+            args.push(format!("--app={}", url));
+        }
 
         let chrome = Chrome::new_with_args(locate_chrome(), args);
         UI { chrome, _tmpdir }
