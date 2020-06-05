@@ -223,7 +223,7 @@ pub fn new_process(path: String, args: &mut [String]) -> (pid_t, PipeReader, Pip
         };
 
         let null_read = CreateFileW(
-            L("null").as_mut_ptr(),
+            L("NUL").as_mut_ptr(),
             FILE_GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             &mut sa as LPSECURITY_ATTRIBUTES,
@@ -232,7 +232,7 @@ pub fn new_process(path: String, args: &mut [String]) -> (pid_t, PipeReader, Pip
             NULL(),
         );
         let null_write = CreateFileW(
-            L("null").as_mut_ptr(),
+            L("NUL").as_mut_ptr(),
             FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             &mut sa as LPSECURITY_ATTRIBUTES,
