@@ -314,5 +314,5 @@ pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> JSResult {
 }
 
 pub fn close(c: Arc<Chrome>) {
-    send(c.clone(), "Browser.close", &json!({})).unwrap();
+    std::thread::spawn(move || send(c, "Browser.close", &json!({})).unwrap());
 }
