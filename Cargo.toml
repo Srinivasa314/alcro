@@ -17,7 +17,7 @@ tinyfiledialogs = "^3"
 libc = "^0"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "^0.3", features = ["namedpipeapi" , "synchapi" ] }
+winapi = { version = "^0.3", features = ["namedpipeapi" , "synchapi" , "handleapi" ] }
 os_str_bytes = "^2"
 
 [dev-dependencies]
