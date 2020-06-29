@@ -137,17 +137,17 @@ pub fn new_process(mut path: String, args: &mut [String]) -> (pid_t, PipeReader,
             arg.push('\0')
         }
 
-        let mut args_ptr_list = vec![path.as_ptr() as *const i8];
+        let mut args_ptr_list = vec![path.as_ptr() as *const c_char];
         args_ptr_list.append(
             &mut args
                 .into_iter()
-                .map(|s| s.as_ptr() as *const i8)
-                .collect::<Vec<*const i8>>(),
+                .map(|s| s.as_ptr() as *const c_char)
+                .collect::<Vec<*const c_char>>(),
         );
         args_ptr_list.push(NULL());
 
         unsafe {
-            execv(path.as_ptr() as *const i8, args_ptr_list.as_ptr());
+            execv(path.as_ptr() as *const c_char, args_ptr_list.as_ptr());
         }
         panic!("Unable to exec");
     }
