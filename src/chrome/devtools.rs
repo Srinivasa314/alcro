@@ -62,7 +62,7 @@ pub fn readloop(c: Arc<Chrome>) {
 }
 
 pub fn send(c: Arc<Chrome>, method: &str, params: &JSObject) -> JSResult {
-    let id = c.id.fetch_add(1, Ordering::SeqCst) + 1;
+    let id = c.id.fetch_add(1, Ordering::Relaxed) + 1;
     let json_msg = json!({
         "id":id,
         "method":method,

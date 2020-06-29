@@ -135,7 +135,7 @@ impl Chrome {
 
         if !args.contains(&"--headless".to_string()) {
             let win_id = get_window_for_target(Arc::clone(&c_arc)).unwrap();
-            Arc::clone(&c_arc).window.store(win_id, Ordering::SeqCst);
+            Arc::clone(&c_arc).window.store(win_id, Ordering::Relaxed);
         }
         c_arc
     }
@@ -249,7 +249,7 @@ pub fn bounds(c: Arc<Chrome>) -> Result<Bounds, JSObject> {
         Arc::clone(&c),
         "Browser.getWindowBounds",
         &json!({
-            "windowId": c.window.load(Ordering::SeqCst)
+            "windowId": c.window.load(Ordering::Relaxed)
         }),
     ) {
         Err(e) => Err(e),
