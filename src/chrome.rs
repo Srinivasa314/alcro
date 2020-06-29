@@ -110,7 +110,7 @@ impl Chrome {
                 c_arc_clone.done.store(true, Ordering::SeqCst);
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(1))
+            std::thread::sleep(std::time::Duration::from_millis(10))
         });
 
         let c_arc_clone = c_arc.clone();
@@ -198,7 +198,7 @@ impl Chrome {
 
     pub fn wait_finish(&self) {
         while !self.done() {
-            std::thread::sleep(std::time::Duration::from_millis(1))
+            std::thread::sleep(std::time::Duration::from_millis(10))
         }
     }
 }
