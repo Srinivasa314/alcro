@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 mod devtools;
 use devtools::{readloop, recv_msg, send, send_msg};
 mod pipe;
-use pipe::{exited, kill_proc, new_process, pid_t, PipeReader, PipeWriter};
+use pipe::{exited, kill_proc, new_process, PipeReader, PipeWriter, Process};
 
 /// A JS object. It is an alias for `serde_json::Value`. See it's documentation for how to use it.
 pub type JSObject = serde_json::Value;
@@ -101,12 +101,12 @@ impl Chrome {
         let c_arc_clone = c_arc.clone();
 
         std::thread::spawn(move || loop {
-            if exited(pid as pid_t) {
+            if exited(pid as Process) {
                 c_arc_clone.done.store(true, Ordering::SeqCst);
                 break;
             }
             if kill_recv.try_recv().is_ok() {
-                kill_proc(pid as pid_t);
+                kill_proc(pid as Process);
                 c_arc_clone.done.store(true, Ordering::SeqCst);
                 break;
             }
@@ -193,7 +193,7 @@ impl Chrome {
     }
 
     pub fn done(&self) -> bool {
-        return self.done.load(Ordering::SeqCst);
+        self.done.load(Ordering::SeqCst)
     }
 
     pub fn wait_finish(&self) {
@@ -217,17 +217,17 @@ fn get_window_for_target(c: Arc<Chrome>) -> Result<i32, JSObject> {
 }
 
 pub fn load(c: Arc<Chrome>, url: &str) -> JSResult {
-    return send(Arc::clone(&c), "Page.navigate", &json!({ "url": url }));
+    send(Arc::clone(&c), "Page.navigate", &json!({ "url": url }))
 }
 
 pub fn eval(c: Arc<Chrome>, expr: &str) -> JSResult {
-    return send(
+    send(
         c,
         "Runtime.evaluate",
         &json!({
             "expression": expr, "awaitPromise": true, "returnByValue": true
         }),
-    );
+    )
 }
 
 pub fn set_bounds(c: Arc<Chrome>, b: Bounds) -> JSResult {
@@ -310,7 +310,7 @@ pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> JSResult {
     ) {
         return Err(e);
     }
-    return eval(Arc::clone(&c), &script);
+    eval(Arc::clone(&c), &script)
 }
 
 pub fn close(c: Arc<Chrome>) {

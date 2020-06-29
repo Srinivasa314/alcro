@@ -116,7 +116,7 @@ impl UI {
 
     /// Returns true if the browser is closed
     pub fn done(&self) -> bool {
-        return self.chrome.done();
+        self.chrome.done()
     }
 
     /// Wait for the browser to be closed
@@ -139,7 +139,7 @@ impl UI {
                 &html
             }
         };
-        return load(self.chrome.clone(), url);
+        load(self.chrome.clone(), url)
     }
 
     /// Bind a rust function so that JS code can use it. It returns Err if it fails.
@@ -234,6 +234,12 @@ pub struct UIBuilder<'a> {
     width: i32,
     height: i32,
     custom_args: &'a [&'a str],
+}
+
+impl<'a> Default for UIBuilder<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<'a> UIBuilder<'a> {

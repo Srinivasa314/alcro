@@ -8,7 +8,7 @@ pub struct PipeWriter {
 }
 
 #[cfg(target_family = "unix")]
-type size = size_t;
+type Size = size_t;
 
 #[cfg(target_family = "windows")]
 type size = c_uint;
@@ -17,7 +17,7 @@ impl PipeWriter {
     pub fn write(&mut self, mut msg: String) {
         msg.push('\0');
         unsafe {
-            write(self.fd, msg.as_ptr() as *const c_void, msg.len() as size);
+            write(self.fd, msg.as_ptr() as *const c_void, msg.len() as Size);
         }
     }
 
@@ -42,21 +42,19 @@ impl PipeReader {
     pub fn read(&mut self) -> String {
         let mut resbuf: [u8; BUFSIZE] = [0; BUFSIZE];
         let mut s: Vec<u8> = vec![];
-        let mut nbytes = 0;
+        let mut nbytes = self.extra_buffer.len();
 
         if !self.extra_buffer.is_empty() {
-            for i in 0..self.extra_buffer.len()
-            {
-            resbuf[i]=self.extra_buffer[i];
+            for (i, byte) in resbuf.iter_mut().enumerate().take(self.extra_buffer.len()) {
+                *byte = self.extra_buffer[i];
             }
-            nbytes = self.extra_buffer.len();
         }
 
         loop {
             if self.extra_buffer.is_empty() {
                 unsafe {
                     nbytes =
-                        read(self.fd, resbuf.as_mut_ptr() as *mut c_void, BUFSIZE as size) as usize;
+                        read(self.fd, resbuf.as_mut_ptr() as *mut c_void, BUFSIZE as Size) as usize;
                 }
             } else {
                 self.extra_buffer.clear();
@@ -75,7 +73,7 @@ impl PipeReader {
             }
 
             s.extend_from_slice(&resbuf[0..(len as usize)]);
-            if null_found == true && len + 1 < nbytes {
+            if null_found && len + 1 < nbytes {
                 self.extra_buffer = resbuf[((len + 1) as usize)..(nbytes as usize)].to_vec();
             }
             if null_found {
@@ -87,10 +85,10 @@ impl PipeReader {
 }
 
 #[cfg(target_family = "unix")]
-pub type pid_t = libc::pid_t;
+pub type Process = libc::pid_t;
 
 #[cfg(target_family = "unix")]
-pub fn new_process(mut path: String, args: &mut [String]) -> (pid_t, PipeReader, PipeWriter) {
+pub fn new_process(mut path: String, args: &mut [String]) -> (Process, PipeReader, PipeWriter) {
     const READ_END: usize = 0;
     const WRITE_END: usize = 1;
 
@@ -102,7 +100,7 @@ pub fn new_process(mut path: String, args: &mut [String]) -> (pid_t, PipeReader,
         pipe(pipe4.as_mut_ptr());
     }
 
-    let childpid: pid_t;
+    let childpid: Process;
     unsafe {
         childpid = fork();
     }
@@ -118,7 +116,7 @@ pub fn new_process(mut path: String, args: &mut [String]) -> (pid_t, PipeReader,
             writep = PipeWriter::new(pipe3[WRITE_END]);
             readp = PipeReader::new(pipe4[READ_END]);
         }
-        return (childpid, readp, writep);
+        (childpid, readp, writep)
     } else {
         unsafe {
             let dev_null_path = std::ffi::CString::new("/dev/null").unwrap();
@@ -140,7 +138,7 @@ pub fn new_process(mut path: String, args: &mut [String]) -> (pid_t, PipeReader,
         let mut args_ptr_list = vec![path.as_ptr() as *const c_char];
         args_ptr_list.append(
             &mut args
-                .into_iter()
+                .iter_mut()
                 .map(|s| s.as_ptr() as *const c_char)
                 .collect::<Vec<*const c_char>>(),
         );
@@ -154,7 +152,7 @@ pub fn new_process(mut path: String, args: &mut [String]) -> (pid_t, PipeReader,
 }
 
 #[cfg(target_family = "unix")]
-pub fn kill_proc(p: pid_t) {
+pub fn kill_proc(p: Process) {
     unsafe {
         kill(p, SIGINT);
     }
@@ -175,7 +173,7 @@ const FPIPE: u8 = 0x08;
 #[cfg(target_family = "windows")]
 const FDEV: u8 = 0x40;
 #[cfg(target_family = "windows")]
-pub type pid_t = HANDLE;
+pub type Process = HANDLE;
 
 #[cfg(target_family = "windows")]
 use os_str_bytes::OsStrBytes;
@@ -213,7 +211,7 @@ use winapi::um::winbase::*;
 use winapi::um::winnt::*;
 
 #[cfg(target_family = "windows")]
-pub fn new_process(path: String, args: &mut [String]) -> (pid_t, PipeReader, PipeWriter) {
+pub fn new_process(path: String, args: &mut [String]) -> (Process, PipeReader, PipeWriter) {
     unsafe {
         let size_sa = size_of::<SECURITY_ATTRIBUTES>() as u32;
         let mut sa = SECURITY_ATTRIBUTES {
@@ -321,7 +319,7 @@ pub fn new_process(path: String, args: &mut [String]) -> (pid_t, PipeReader, Pip
 }
 
 #[cfg(target_family = "windows")]
-pub fn kill_proc(pid: pid_t) {
+pub fn kill_proc(pid: Process) {
     unsafe {
         TerminateProcess(pid, 0);
         CloseHandle(pid);
@@ -329,7 +327,7 @@ pub fn kill_proc(pid: pid_t) {
 }
 
 #[cfg(target_family = "windows")]
-pub fn exited(pid: pid_t) -> bool {
+pub fn exited(pid: Process) -> bool {
     use winapi::um::synchapi::WaitForSingleObject;
     unsafe {
         return WaitForSingleObject(pid, 0) == WAIT_OBJECT_0;
@@ -337,11 +335,9 @@ pub fn exited(pid: pid_t) -> bool {
 }
 
 #[cfg(target_family = "unix")]
-pub fn exited(pid: pid_t) -> bool {
+pub fn exited(pid: Process) -> bool {
     let mut status = 0;
-    unsafe {
-        return waitpid(pid, &mut status, WNOHANG) != 0;
-    }
+    unsafe { waitpid(pid, &mut status, WNOHANG) != 0 }
 }
 
 #[cfg(target_family = "windows")]

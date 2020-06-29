@@ -14,7 +14,7 @@ pub fn recv_msg(p: &Mutex<PipeReader>) -> String {
 
 pub fn readloop(c: Arc<Chrome>) {
     loop {
-        let pmsg=recv_msg(&c.precv);
+        let pmsg = recv_msg(&c.precv);
         let pmsg: JSObject = serde_json::from_str(&pmsg).unwrap();
 
         if pmsg["method"] == "Target.targetDestroyed" {
@@ -85,8 +85,7 @@ pub fn send(c: Arc<Chrome>, method: &str, params: &JSObject) -> JSResult {
         })
         .to_string(),
     );
-    let res = r.recv().unwrap();
-    res
+    r.recv().unwrap()
 }
 
 fn send_result(reschan: &Sender<JSResult>, res: &JSObject) {
