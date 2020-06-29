@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 mod devtools;
 use devtools::{readloop, recv_msg, send, send_msg};
-mod pipe;
-use pipe::{exited, kill_proc, new_process, PipeReader, PipeWriter, Process};
+mod os;
+use os::{exited, kill_proc, new_process, PipeReader, PipeWriter, Process};
 
 /// A JS object. It is an alias for `serde_json::Value`. See it's documentation for how to use it.
 pub type JSObject = serde_json::Value;
