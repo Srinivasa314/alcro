@@ -45,9 +45,7 @@ impl PipeReader {
         let mut nbytes = self.extra_buffer.len();
 
         if !self.extra_buffer.is_empty() {
-            for (i, byte) in resbuf.iter_mut().enumerate().take(self.extra_buffer.len()) {
-                *byte = self.extra_buffer[i];
-            }
+            resbuf[..self.extra_buffer.len()].clone_from_slice(&self.extra_buffer);
         }
 
         loop {
