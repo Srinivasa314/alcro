@@ -138,18 +138,15 @@ pub fn new_process(path: String, args: &mut [String]) -> (Process, PipeReader, P
     }
 }
 
-pub fn kill_proc(pid: Process) {
-    unsafe {
-        TerminateProcess(pid, 0);
-        CloseHandle(pid);
-    }
-}
-
 pub fn exited(pid: Process) -> bool {
     use winapi::um::synchapi::WaitForSingleObject;
     unsafe {
         return WaitForSingleObject(pid, 0) == WAIT_OBJECT_0;
     }
+}
+
+pub fn wait_proc(pid:Process){
+    WaitForSingleObject(pid,INFINITE);
 }
 
 use std::io::{self, ErrorKind};

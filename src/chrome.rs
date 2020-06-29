@@ -4,12 +4,12 @@ use std::sync::{Arc, Mutex};
 use crossbeam_channel::{bounded, Sender};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, Ordering};
 
 mod devtools;
 use devtools::{readloop, recv_msg, send, send_msg};
 mod os;
-use os::{exited, kill_proc, new_process, PipeReader, PipeWriter, Process};
+use os::{exited, kill_proc, new_process, wait_proc, PipeReader, PipeWriter, Process};
 
 /// A JS object. It is an alias for `serde_json::Value`. See it's documentation for how to use it.
 pub type JSObject = serde_json::Value;
@@ -23,6 +23,7 @@ type BindingFunc = Arc<dyn Fn(&[JSObject]) -> JSResult + Sync + Send>;
 
 pub struct Chrome {
     id: AtomicI32,
+    pid: Process,
     psend: Mutex<PipeWriter>,
     precv: Mutex<PipeReader>,
     target: String,
@@ -30,7 +31,6 @@ pub struct Chrome {
     kill_send: Sender<()>,
     pending: Mutex<HashMap<i32, Sender<JSResult>>>,
     window: AtomicI32,
-    done: AtomicBool,
     bindings: Mutex<HashMap<String, BindingFunc>>,
 }
 
@@ -78,7 +78,6 @@ impl WindowState {
 impl Chrome {
     pub fn new_with_args(chrome_binary: String, mut args: Vec<String>) -> Arc<Chrome> {
         let (pid, precv, psend) = new_process(chrome_binary, &mut args);
-        let pid = pid as usize;
         let (kill_send, kill_recv) = bounded(1);
 
         let mut c = Chrome {
@@ -88,29 +87,23 @@ impl Chrome {
             target: String::new(),
             session: String::new(),
             window: AtomicI32::new(0),
-            done: AtomicBool::new(false),
             pending: Mutex::new(HashMap::new()),
             bindings: Mutex::new(HashMap::new()),
             kill_send,
+            pid,
         };
 
         c.target = c.find_target();
         c.session = c.start_session();
 
         let c_arc = Arc::new(c);
-        let c_arc_clone = c_arc.clone();
 
-        std::thread::spawn(move || loop {
-            if exited(pid as Process) {
-                c_arc_clone.done.store(true, Ordering::SeqCst);
-                break;
-            }
-            if kill_recv.try_recv().is_ok() {
-                kill_proc(pid as Process);
-                c_arc_clone.done.store(true, Ordering::SeqCst);
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10))
+        #[cfg(target_family = "unix")]
+        let pid = pid as usize;
+        #[cfg(target_family = "unix")]
+        std::thread::spawn(move || {
+            kill_recv.recv().unwrap();
+            kill_proc(pid as Process);
         });
 
         let c_arc_clone = c_arc.clone();
@@ -193,13 +186,11 @@ impl Chrome {
     }
 
     pub fn done(&self) -> bool {
-        self.done.load(Ordering::SeqCst)
+        exited(self.pid)
     }
 
     pub fn wait_finish(&self) {
-        while !self.done() {
-            std::thread::sleep(std::time::Duration::from_millis(10))
-        }
+        wait_proc(self.pid)
     }
 }
 

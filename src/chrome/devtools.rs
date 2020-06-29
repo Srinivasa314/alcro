@@ -18,6 +18,7 @@ pub fn readloop(c: Arc<Chrome>) {
         let pmsg: JSObject = serde_json::from_str(&pmsg).unwrap();
 
         if pmsg["method"] == "Target.targetDestroyed" {
+            #[cfg(target_family = "unix")]
             if pmsg["params"]["targetId"] == c.target {
                 let _ = c.kill_send.send(());
                 return;

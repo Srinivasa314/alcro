@@ -69,11 +69,18 @@ pub fn new_process(mut path: String, args: &mut [String]) -> (Process, PipeReade
 
 pub fn kill_proc(p: Process) {
     unsafe {
-        kill(p, SIGINT);
+        kill(p, SIGTERM);
     }
 }
 
 pub fn exited(pid: Process) -> bool {
     let mut status = 0;
     unsafe { waitpid(pid, &mut status, WNOHANG) != 0 }
+}
+
+pub fn wait_proc(pid: Process) {
+    let mut status = 0;
+    unsafe {
+        waitpid(pid, &mut status, 0);
+    }
 }

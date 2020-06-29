@@ -36,7 +36,10 @@ pub use chrome::{Bounds, JSObject, JSResult, WindowState};
 mod locate;
 use locate::locate_chrome;
 pub use locate::tinyfiledialogs as dialog;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 const DEFAULT_CHROME_ARGS: &[&str] = &[
     "--disable-background-networking",
@@ -70,6 +73,7 @@ const DEFAULT_CHROME_ARGS: &[&str] = &[
 pub struct UI {
     chrome: Arc<Chrome>,
     _tmpdir: Option<tempdir::TempDir>,
+    waited: AtomicBool,
 }
 
 impl UI {
@@ -111,7 +115,11 @@ impl UI {
         }
 
         let chrome = Chrome::new_with_args(locate_chrome(), args);
-        UI { chrome, _tmpdir }
+        UI {
+            chrome,
+            _tmpdir,
+            waited: AtomicBool::new(false),
+        }
     }
 
     /// Returns true if the browser is closed
@@ -122,6 +130,7 @@ impl UI {
     /// Wait for the browser to be closed
     pub fn wait_finish(&self) {
         self.chrome.wait_finish();
+        self.waited.store(true, Ordering::Relaxed);
     }
 
     /// Close the browser window
@@ -211,10 +220,12 @@ impl UI {
 /// Closes the browser window
 impl Drop for UI {
     fn drop(&mut self) {
-        if !self.done() {
-            self.close();
+        if !self.waited.load(Ordering::Relaxed) {
+            if !self.done() {
+                self.close();
+                self.wait_finish();
+            }
         }
-        self.wait_finish();
     }
 }
 
