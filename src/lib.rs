@@ -31,9 +31,9 @@
 //! ```
 
 mod chrome;
-use chrome::{bind, bounds, close, eval, load, set_bounds, Chrome};
 #[cfg(target_family = "windows")]
 use chrome::close_handle;
+use chrome::{bind, bounds, close, eval, load, set_bounds, Chrome};
 pub use chrome::{Bounds, JSObject, JSResult, WindowState};
 mod locate;
 use locate::locate_chrome;
