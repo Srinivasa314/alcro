@@ -144,9 +144,7 @@ pub fn new_process(path: String, args: &mut [String]) -> (Process, PipeReader, P
 
 pub fn exited(pid: Process) -> bool {
     use winapi::um::synchapi::WaitForSingleObject;
-    unsafe {
-        WaitForSingleObject(pid, 0) == WAIT_OBJECT_0
-    }
+    unsafe { WaitForSingleObject(pid, 0) == WAIT_OBJECT_0 }
 }
 
 pub fn wait_proc(pid: Process) {
@@ -171,41 +169,39 @@ fn make_command_line(prog: &OsStr, args: &[OsString]) -> io::Result<Vec<u16>> {
     }
     Ok(cmd)
 }
-    fn append_arg(cmd: &mut Vec<u16>, arg: &OsStr, force_quotes: bool) -> io::Result<()> {
-        // If an argument has 0 characters then we need to quote it to ensure
-        // that it actually gets passed through on the command line or otherwise
-        // it will be dropped entirely when parsed on the other end.
-        ensure_no_nuls(arg)?;
-        let arg_bytes = &arg.to_bytes();
-        let quote = force_quotes
-            || arg_bytes.iter().any(|c| *c == b' ' || *c == b'\t')
-            || arg_bytes.is_empty();
-        if quote {
-            cmd.push('"' as u16);
-        }
-
-        let mut backslashes: usize = 0;
-        for x in arg.encode_wide() {
-            if x == '\\' as u16 {
-                backslashes += 1;
-            } else {
-                if x == '"' as u16 {
-                    // Add n+1 backslashes to total 2n+1 before internal '"'.
-                    cmd.extend((0..=backslashes).map(|_| '\\' as u16));
-                }
-                backslashes = 0;
-            }
-            cmd.push(x);
-        }
-
-        if quote {
-            // Add n backslashes to total 2n before ending '"'.
-            cmd.extend((0..backslashes).map(|_| '\\' as u16));
-            cmd.push('"' as u16);
-        }
-        Ok(())
+fn append_arg(cmd: &mut Vec<u16>, arg: &OsStr, force_quotes: bool) -> io::Result<()> {
+    // If an argument has 0 characters then we need to quote it to ensure
+    // that it actually gets passed through on the command line or otherwise
+    // it will be dropped entirely when parsed on the other end.
+    ensure_no_nuls(arg)?;
+    let arg_bytes = &arg.to_bytes();
+    let quote =
+        force_quotes || arg_bytes.iter().any(|c| *c == b' ' || *c == b'\t') || arg_bytes.is_empty();
+    if quote {
+        cmd.push('"' as u16);
     }
 
+    let mut backslashes: usize = 0;
+    for x in arg.encode_wide() {
+        if x == '\\' as u16 {
+            backslashes += 1;
+        } else {
+            if x == '"' as u16 {
+                // Add n+1 backslashes to total 2n+1 before internal '"'.
+                cmd.extend((0..=backslashes).map(|_| '\\' as u16));
+            }
+            backslashes = 0;
+        }
+        cmd.push(x);
+    }
+
+    if quote {
+        // Add n backslashes to total 2n before ending '"'.
+        cmd.extend((0..backslashes).map(|_| '\\' as u16));
+        cmd.push('"' as u16);
+    }
+    Ok(())
+}
 
 fn ensure_no_nuls<T: AsRef<OsStr>>(str: T) -> io::Result<T> {
     if str.as_ref().encode_wide().any(|b| b == 0) {
@@ -220,6 +216,6 @@ fn ensure_no_nuls<T: AsRef<OsStr>>(str: T) -> io::Result<T> {
 
 pub fn close_process_handle(p: Process) {
     unsafe {
-    CloseHandle(p);
+        CloseHandle(p);
     }
 }

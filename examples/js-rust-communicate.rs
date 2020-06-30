@@ -6,7 +6,7 @@ fn main() {
     let ui = UIBuilder::new()
         .content(Content::Html(include_str!("js-rust-communicate.html")))
         .run();
-    
+
     //Rust calling JS
     assert_eq!(
         ui.eval("document.getElementById('title').innerText")

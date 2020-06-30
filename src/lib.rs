@@ -31,7 +31,7 @@
 //! ```
 
 mod chrome;
-use chrome::{bind, bounds, close, eval, load, close_handle, set_bounds, Chrome};
+use chrome::{bind, bounds, close, close_handle, eval, load, set_bounds, Chrome};
 pub use chrome::{Bounds, JSObject, JSResult, WindowState};
 mod locate;
 use locate::locate_chrome;
