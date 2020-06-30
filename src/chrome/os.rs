@@ -60,8 +60,8 @@ impl PipeReader {
             }
             let mut null_found = false;
             let mut len = nbytes;
-            for i in 0..nbytes {
-                if resbuf[i] == 0 {
+            for (i, byte) in resbuf.iter().enumerate().take(nbytes) {
+                if *byte == 0 {
                     len = i;
                     null_found = true;
                     break;
