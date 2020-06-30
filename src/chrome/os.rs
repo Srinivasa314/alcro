@@ -61,16 +61,16 @@ impl PipeReader {
             let mut null_found = false;
             let mut len = nbytes;
             for i in 0..nbytes {
-                if resbuf[i as usize] == 0 {
+                if resbuf[i] == 0 {
                     len = i;
                     null_found = true;
                     break;
                 }
             }
 
-            s.extend_from_slice(&resbuf[0..(len as usize)]);
+            s.extend_from_slice(&resbuf[0..len]);
             if null_found && len + 1 < nbytes {
-                self.extra_buffer = resbuf[((len + 1) as usize)..(nbytes as usize)].to_vec();
+                self.extra_buffer = resbuf[(len + 1)..nbytes].to_vec();
             }
             if null_found {
                 break;
