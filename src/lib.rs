@@ -220,11 +220,9 @@ impl UI {
 /// Closes the browser window
 impl Drop for UI {
     fn drop(&mut self) {
-        if !self.waited.load(Ordering::Relaxed) {
-            if !self.done() {
-                self.close();
-                self.wait_finish();
-            }
+        if !self.waited.load(Ordering::Relaxed) && !self.done() {
+            self.close();
+            self.wait_finish();
         }
     }
 }
