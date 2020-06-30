@@ -103,11 +103,9 @@ impl Chrome {
         let c_arc = Arc::new(c);
 
         #[cfg(target_family = "unix")]
-        let pid = pid as usize;
-        #[cfg(target_family = "unix")]
         std::thread::spawn(move || {
             kill_recv.recv().unwrap();
-            kill_proc(pid as Process);
+            kill_proc(pid);
         });
 
         let c_arc_clone = c_arc.clone();
