@@ -1,3 +1,7 @@
+use super::{PipeReader, PipeWriter};
+use std::ptr::null_mut as NULL;
+use libc::*;
+
 #[repr(packed)]
 struct StdioBuffer5 {
     no_fds: u32,
@@ -145,8 +149,9 @@ pub fn exited(pid: Process) -> bool {
     }
 }
 
-pub fn wait_proc(pid:Process){
-    WaitForSingleObject(pid,INFINITE);
+pub fn wait_proc(pid: Process) {
+    use winapi::um::synchapi::WaitForSingleObject;
+    WaitForSingleObject(pid, INFINITE);
 }
 
 use std::io::{self, ErrorKind};

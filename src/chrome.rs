@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicI32, Ordering};
 mod devtools;
 use devtools::{readloop, recv_msg, send, send_msg};
 mod os;
-use os::{exited, kill_proc, new_process, wait_proc, PipeReader, PipeWriter, Process};
+use os::{exited, new_process, wait_proc, PipeReader, PipeWriter, Process};
+#[cfg(target_family = "unix")]
+use os::kill_proc;
 
 /// A JS object. It is an alias for `serde_json::Value`. See it's documentation for how to use it.
 pub type JSObject = serde_json::Value;
@@ -23,7 +25,7 @@ type BindingFunc = Arc<dyn Fn(&[JSObject]) -> JSResult + Sync + Send>;
 
 pub struct Chrome {
     id: AtomicI32,
-    pid: Process,
+    pid: usize,
     psend: Mutex<PipeWriter>,
     precv: Mutex<PipeReader>,
     target: String,
@@ -90,7 +92,7 @@ impl Chrome {
             pending: Mutex::new(HashMap::new()),
             bindings: Mutex::new(HashMap::new()),
             kill_send,
-            pid,
+            pid:pid as usize,
         };
 
         c.target = c.find_target();
@@ -186,11 +188,11 @@ impl Chrome {
     }
 
     pub fn done(&self) -> bool {
-        exited(self.pid)
+        exited(self.pid as Process)
     }
 
     pub fn wait_finish(&self) {
-        wait_proc(self.pid)
+        wait_proc(self.pid as Process)
     }
 }
 

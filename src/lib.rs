@@ -224,6 +224,11 @@ impl Drop for UI {
             self.close();
             self.wait_finish();
         }
+        #[cfg(target_family = "windows")]
+        unsafe {
+            use winapi::um::handleapi::CloseHandle;
+            CloseHandle(self.chrome.pid as Process);
+        }
     }
 }
 
