@@ -58,21 +58,16 @@ impl PipeReader {
             if nbytes == 0 {
                 break;
             }
-            let mut null_found = false;
-            let mut len = nbytes;
-            for (i, byte) in resbuf.iter().enumerate().take(nbytes) {
-                if *byte == 0 {
-                    len = i;
-                    null_found = true;
-                    break;
-                }
-            }
-
+            let index = resbuf[..nbytes].iter().position(|x| *x == 0);
+            let len = match index {
+                Some(index) => index,
+                None => nbytes,
+            };
             s.extend_from_slice(&resbuf[0..len]);
-            if null_found && len + 1 < nbytes {
+            if index.is_some() && len + 1 < nbytes {
                 self.extra_buffer = resbuf[(len + 1)..nbytes].to_vec();
             }
-            if null_found {
+            if index.is_some() {
                 break;
             }
         }
