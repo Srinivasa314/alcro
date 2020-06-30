@@ -31,7 +31,7 @@
 //! ```
 
 mod chrome;
-use chrome::{bind, bounds, close, eval, load, set_bounds, Chrome};
+use chrome::{bind, bounds, close, eval, load, close_handle, set_bounds, Chrome};
 pub use chrome::{Bounds, JSObject, JSResult, WindowState};
 mod locate;
 use locate::locate_chrome;
@@ -225,7 +225,7 @@ impl Drop for UI {
             self.wait_finish();
         }
         #[cfg(target_family = "windows")]
-        close_handle(self.chrome);
+        close_handle(self.chrome.clone());
     }
 }
 
