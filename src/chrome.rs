@@ -9,9 +9,11 @@ use std::sync::atomic::{AtomicI32, Ordering};
 mod devtools;
 use devtools::{readloop, recv_msg, send, send_msg};
 mod os;
-use os::{exited, new_process, wait_proc, PipeReader, PipeWriter, Process};
+#[cfg(target_family = "windows")]
+use os::close_process_handle;
 #[cfg(target_family = "unix")]
 use os::kill_proc;
+use os::{exited, new_process, wait_proc, PipeReader, PipeWriter, Process};
 
 /// A JS object. It is an alias for `serde_json::Value`. See it's documentation for how to use it.
 pub type JSObject = serde_json::Value;
@@ -92,7 +94,7 @@ impl Chrome {
             pending: Mutex::new(HashMap::new()),
             bindings: Mutex::new(HashMap::new()),
             kill_send,
-            pid:pid as usize,
+            pid: pid as usize,
         };
 
         c.target = c.find_target();
@@ -308,4 +310,9 @@ pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> JSResult {
 
 pub fn close(c: Arc<Chrome>) {
     std::thread::spawn(move || send(c, "Browser.close", &json!({})).unwrap());
+}
+
+#[cfg(target_family = "windows")]
+pub fn close_handle(c: Arc<Chrome>) {
+    close_process_handle(c.pid as Process)
 }

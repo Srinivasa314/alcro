@@ -1,6 +1,6 @@
 use super::{PipeReader, PipeWriter};
-use std::ptr::null_mut as NULL;
 use libc::*;
+use std::ptr::null_mut as NULL;
 
 #[repr(packed)]
 struct StdioBuffer5 {
@@ -213,5 +213,12 @@ fn ensure_no_nuls<T: AsRef<OsStr>>(str: T) -> io::Result<T> {
         ))
     } else {
         Ok(str)
+    }
+}
+
+pub fn close_process_handle(p: Process) {
+    unsafe {
+    use winapi::um::handleapi::CloseHandle;
+    CloseHandle(p);
     }
 }
