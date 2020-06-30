@@ -104,7 +104,7 @@ impl UI {
         args.push(format!("--user-data-dir={}", dir.to_str().unwrap()));
         args.push(format!("--window-size={},{}", width, height));
         for arg in custom_args {
-            args.push(arg.to_string())
+            args.push((*arg).to_string())
         }
         args.push("--remote-debugging-pipe".to_string());
 

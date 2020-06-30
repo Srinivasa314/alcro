@@ -18,7 +18,7 @@ use os_str_bytes::OsStrBytes;
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::OsStrExt;
 
-fn L(string: &str) -> Vec<u16> {
+fn l(string: &str) -> Vec<u16> {
     use std::iter::once;
     OsStr::new(string).encode_wide().chain(once(0)).collect()
 }
@@ -45,7 +45,7 @@ pub fn new_process(path: String, args: &mut [String]) -> (Process, PipeReader, P
         };
 
         let null_read = CreateFileW(
-            L("NUL").as_mut_ptr(),
+            l("NUL").as_mut_ptr(),
             FILE_GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             &mut sa as LPSECURITY_ATTRIBUTES,
@@ -54,7 +54,7 @@ pub fn new_process(path: String, args: &mut [String]) -> (Process, PipeReader, P
             NULL(),
         );
         let null_write = CreateFileW(
-            L("NUL").as_mut_ptr(),
+            l("NUL").as_mut_ptr(),
             FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             &mut sa as LPSECURITY_ATTRIBUTES,
@@ -116,7 +116,7 @@ pub fn new_process(path: String, args: &mut [String]) -> (Process, PipeReader, P
         startupinfo.StartupInfo.cbReserved2 = size_of::<StdioBuffer5>() as u16;
         startupinfo.StartupInfo.lpReserved2 = &mut stdio_buffer as *mut StdioBuffer5 as LPBYTE;
 
-        let args: Vec<OsString> = args.iter().map(|s| OsString::from(s)).collect();
+        let args: Vec<OsString> = args.iter().map(OsString::from).collect();
         let mut cmd_str = make_command_line(&OsString::from(&path), &args).unwrap();
         cmd_str.push(0);
         CreateProcessW(
@@ -138,14 +138,14 @@ pub fn new_process(path: String, args: &mut [String]) -> (Process, PipeReader, P
 
         let writep = PipeWriter::new(open_osfhandle(writepipe3 as isize, O_WRONLY));
         let readp = PipeReader::new(open_osfhandle(readpipe4 as isize, O_RDONLY));
-        return (processinfo.hProcess, readp, writep);
+        (processinfo.hProcess, readp, writep)
     }
 }
 
 pub fn exited(pid: Process) -> bool {
     use winapi::um::synchapi::WaitForSingleObject;
     unsafe {
-        return WaitForSingleObject(pid, 0) == WAIT_OBJECT_0;
+        WaitForSingleObject(pid, 0) == WAIT_OBJECT_0
     }
 }
 
@@ -169,8 +169,8 @@ fn make_command_line(prog: &OsStr, args: &[OsString]) -> io::Result<Vec<u16>> {
         cmd.push(' ' as u16);
         append_arg(&mut cmd, arg, false)?;
     }
-    return Ok(cmd);
-
+    Ok(cmd)
+}
     fn append_arg(cmd: &mut Vec<u16>, arg: &OsStr, force_quotes: bool) -> io::Result<()> {
         // If an argument has 0 characters then we need to quote it to ensure
         // that it actually gets passed through on the command line or otherwise
@@ -205,7 +205,7 @@ fn make_command_line(prog: &OsStr, args: &[OsString]) -> io::Result<Vec<u16>> {
         }
         Ok(())
     }
-}
+
 
 fn ensure_no_nuls<T: AsRef<OsStr>>(str: T) -> io::Result<T> {
     if str.as_ref().encode_wide().any(|b| b == 0) {
@@ -220,7 +220,6 @@ fn ensure_no_nuls<T: AsRef<OsStr>>(str: T) -> io::Result<T> {
 
 pub fn close_process_handle(p: Process) {
     unsafe {
-    use winapi::um::handleapi::CloseHandle;
     CloseHandle(p);
     }
 }
