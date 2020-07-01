@@ -1,5 +1,6 @@
 # Alcro
 
+[![Build Status](https://travis-ci.com/Srinivasa314/alcro.svg?branch=master)](https://travis-ci.com/Srinivasa314/alcro)
 [![Crates.io](https://img.shields.io/crates/v/alcro)](https://crates.io/crates/alcro)
 
 A small library to build desktop apps using rust and modern web technologies. It uses Chrom(e/ium) or similar browsers like MS Edge (new) for UI. It does not bundle chrome but instead communicates with the existing chrome installation.
