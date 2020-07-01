@@ -2,7 +2,6 @@ language: rust
 os:
   - linux
   - osx
-  - windows
 
 script:
   - cargo test --doc
