@@ -5,7 +5,7 @@
 //!
 //! # Example
 //!
-//! ```
+//! ```no_run
 //! #![windows_subsystem = "windows"]
 //! use alcro::{UIBuilder, Content};
 //! use serde_json::to_value;
