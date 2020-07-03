@@ -2,10 +2,20 @@ language: rust
 
 cache: cargo
 
+arch:
+  - amd64
+  - arm64
+
 matrix:
   include:
     - os: linux
+      dist: bionic
+    - os: linux
+      dist: xenial
     - os: osx
+      osx_image: xcode11.6
+    - os: osx
+      osx_image: xcode9.4
     - os: windows
       before_script:
         - choco install googlechrome 
