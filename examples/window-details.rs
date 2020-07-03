@@ -1,7 +1,7 @@
 #![windows_subsystem = "windows"]
 use alcro::{Content, JSObject, UIBuilder, WindowState};
 use serde_json::to_value;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 fn main() {
     let ui = Arc::new(
@@ -10,24 +10,22 @@ fn main() {
             .run(),
     );
 
-    let ui_cloned = ui.clone();
+    let ui2 = Arc::downgrade(&ui);
     ui.bind("windowDetails", move |_| {
-        let bounds = ui_cloned.bounds().unwrap();
+        let ui = Weak::upgrade(&ui2).unwrap();
+        let bounds = ui.bounds().unwrap();
         Ok(to_value(bounds).unwrap())
     })
     .unwrap();
 
-    let ui_cloned = ui.clone();
+    let ui2 = Arc::downgrade(&ui);
     ui.bind("toggle", move |_| {
-        let state = ui_cloned.bounds().unwrap().window_state;
+        let ui = Weak::upgrade(&ui2).unwrap();
+        let state = ui.bounds().unwrap().window_state;
         if state == WindowState::Maximized {
-            ui_cloned
-                .set_bounds(WindowState::Normal.to_bounds())
-                .unwrap();
+            ui.set_bounds(WindowState::Normal.to_bounds()).unwrap();
         } else if state == WindowState::Normal {
-            ui_cloned
-                .set_bounds(WindowState::Maximized.to_bounds())
-                .unwrap();
+            ui.set_bounds(WindowState::Maximized.to_bounds()).unwrap();
         }
         Ok(JSObject::Null)
     })
