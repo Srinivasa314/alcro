@@ -2,9 +2,13 @@ language: rust
 
 cache: cargo
 
-os:
-  - linux
-  - osx
+matrix:
+  include:
+    - os: linux
+    - os: osx
+    - os: windows
+      before_script:
+        - choco install googlechrome 
 
 script:
   - cargo test --doc
