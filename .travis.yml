@@ -5,10 +5,6 @@ cache: cargo
 matrix:
   include:
     - os: linux
-      dist: bionic
-      before_script:
-        - sudo apt --fix-broken install chromium-browser
-    - os: linux
       dist: xenial
     - os: osx
       osx_image: xcode11.6
