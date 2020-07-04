@@ -2,14 +2,12 @@ language: rust
 
 cache: cargo
 
-arch:
-  - amd64
-  - arm64
-
 matrix:
   include:
     - os: linux
       dist: bionic
+      before_script:
+        - sudo apt install chromium-browser
     - os: linux
       dist: xenial
     - os: osx
