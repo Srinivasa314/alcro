@@ -7,7 +7,7 @@ matrix:
     - os: linux
       dist: bionic
       before_script:
-        - sudo apt install chromium-browser
+        - sudo apt --fix-broken install chromium-browser
     - os: linux
       dist: xenial
     - os: osx
