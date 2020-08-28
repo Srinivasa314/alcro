@@ -322,5 +322,5 @@ pub fn close(c: Arc<Chrome>) {
 
 #[cfg(target_family = "windows")]
 pub fn close_handle(c: Arc<Chrome>) {
-    close_process_handle(c.pid as Process)
+    close_process_handle(c.pid as Process).expect("Unable to close handle")
 }
