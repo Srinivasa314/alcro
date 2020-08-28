@@ -105,7 +105,7 @@ impl Chrome {
         #[cfg(target_family = "unix")]
         std::thread::spawn(move || {
             kill_recv.recv().unwrap();
-            kill_proc(pid);
+            kill_proc(pid).expect("Unable to kill process");
         });
 
         let c_arc_clone = c_arc.clone();
