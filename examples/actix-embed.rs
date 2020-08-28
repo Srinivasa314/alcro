@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // get the first bound address' port,
         // so we know where to point at
         let port = server.addrs().first().unwrap().port();
-        let server = server.start();
+        let server = server.run();
 
         let _ = port_tx.send(port);
         let _ = server_tx.send(server);
@@ -73,6 +73,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     ui.wait_finish();
     // gracefully shutdown actix web server
-    let _ = server.stop(true).wait();
+    futures::executor::block_on(server.stop(true));
     Ok(())
 }
