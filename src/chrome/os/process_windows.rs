@@ -137,7 +137,7 @@ pub fn exited(pid: Process) -> std::io::Result<bool> {
     }
 }
 
-pub fn wait_proc(pid: Process) -> Result<()> {
+pub fn wait_proc(pid: Process) -> std::io::Result<()> {
     use winapi::um::synchapi::WaitForSingleObject;
     unsafe {
         if WaitForSingleObject(pid, INFINITE) == WAIT_FAILED {
@@ -148,7 +148,7 @@ pub fn wait_proc(pid: Process) -> Result<()> {
     }
 }
 
-pub fn close_process_handle(p: Process) -> Result<()> {
+pub fn close_process_handle(p: Process) -> std::io::Result<()> {
     unsafe {
         if CloseHandle(p) == 0 {
             Err(std::io::Error::last_os_error())
