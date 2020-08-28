@@ -81,24 +81,8 @@ pub fn new_process(path: &str, args: &[&str]) -> (Process, PipeReader, PipeWrite
             0,
         );
 
-        let mut startupinfo: STARTUPINFOEXW = zeroed();
+        let mut startupinfo: STARTUPINFOW = zeroed();
         let mut processinfo: PROCESS_INFORMATION = zeroed();
-        let mut attrsize: SIZE_T = Default::default();
-        InitializeProcThreadAttributeList(NULL(), 1, 0, &mut attrsize as PSIZE_T);
-        let mut attr_list: Vec<u8> = vec![0; attrsize];
-
-        let mut handle_list = [null_read, null_write, null_write, readpipe3, writepipe4];
-        const PROC_THREAD_ATTRIBUTE_HANDLE_LIST: usize = 0x20002;
-        UpdateProcThreadAttribute(
-            attr_list.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST,
-            0,
-            PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-            handle_list.as_mut_ptr() as PVOID,
-            size_of::<HANDLE>() * 5,
-            NULL(),
-            NULL(),
-        );
-
         let mut stdio_buffer = StdioBuffer5 {
             no_fds: 5,
             flags: [
@@ -111,10 +95,9 @@ pub fn new_process(path: &str, args: &[&str]) -> (Process, PipeReader, PipeWrite
             handles: [null_read, null_write, null_write, readpipe3, writepipe4],
         };
 
-        startupinfo.lpAttributeList = attr_list.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
-        startupinfo.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
-        startupinfo.StartupInfo.cbReserved2 = size_of::<StdioBuffer5>() as u16;
-        startupinfo.StartupInfo.lpReserved2 = &mut stdio_buffer as *mut StdioBuffer5 as LPBYTE;
+        startupinfo.cb = size_of::<STARTUPINFOW>() as u32;
+        startupinfo.cbReserved2 = size_of::<StdioBuffer5>() as u16;
+        startupinfo.lpReserved2 = &mut stdio_buffer as *mut StdioBuffer5 as LPBYTE;
 
         let args: Vec<OsString> = args.iter().map(OsString::from).collect();
         let mut cmd_str = make_command_line(&OsString::from(path), &args).unwrap();
@@ -124,10 +107,10 @@ pub fn new_process(path: &str, args: &[&str]) -> (Process, PipeReader, PipeWrite
             NULL(),
             NULL(),
             TRUE,
-            EXTENDED_STARTUPINFO_PRESENT,
+            0,
             NULL(),
             NULL(),
-            &mut startupinfo as LPSTARTUPINFOEXW as LPSTARTUPINFOW,
+            &mut startupinfo as LPSTARTUPINFOW,
             &mut processinfo as LPPROCESS_INFORMATION,
         );
 
