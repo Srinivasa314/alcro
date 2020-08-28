@@ -179,7 +179,7 @@ impl UI {
     ///             None => return Err(to_value("Not number").unwrap())
     ///         }
     ///     }
-    ///     Ok(to_value(product).unwrap())
+    ///     Ok(to_value(sum).unwrap())
     /// });
     /// assert_eq!(ui.eval("(async () => await add(1,2,3))();").unwrap(), 6);
     /// assert!(ui.eval("(async () => await add(1,2,'hi'))();").is_err());
