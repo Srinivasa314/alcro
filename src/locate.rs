@@ -49,7 +49,7 @@ pub fn locate_chrome() -> Result<String, Box<dyn std::error::Error>> {
         }
     }
     prompt_download()?;
-    Err("Chrome not found!")?
+    Err("Chrome not found!".into())
 }
 
 use std::process::Command;

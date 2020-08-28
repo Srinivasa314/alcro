@@ -80,8 +80,8 @@ impl WindowState {
 }
 
 impl Chrome {
-    pub fn new_with_args(chrome_binary: &str, mut args: &[&str]) -> Result<Arc<Chrome>, String> {
-        let (pid, precv, psend) = new_process(chrome_binary, &mut args);
+    pub fn new_with_args(chrome_binary: &str, args: &[&str]) -> Result<Arc<Chrome>, String> {
+        let (pid, precv, psend) = new_process(chrome_binary, &args);
         let (kill_send, kill_recv) = bounded(1);
 
         let mut c = Chrome {
