@@ -126,15 +126,35 @@ pub fn new_process(path: &str, args: &[&str]) -> (Process, PipeReader, PipeWrite
     }
 }
 
-pub fn exited(pid: Process) -> bool {
-    use winapi::um::synchapi::WaitForSingleObject;
-    unsafe { WaitForSingleObject(pid, 0) == WAIT_OBJECT_0 }
-}
-
-pub fn wait_proc(pid: Process) {
+pub fn exited(pid: Process) -> std::io::Result<bool> {
     use winapi::um::synchapi::WaitForSingleObject;
     unsafe {
-        WaitForSingleObject(pid, INFINITE);
+        match WaitForSingleObject(pid, 0) {
+            WAIT_OBJECT_0 => Ok(true),
+            WAIT_FAILED => Err(std::io::Error::last_os_error()),
+            _ => Ok(false),
+        }
+    }
+}
+
+pub fn wait_proc(pid: Process) -> Result<()> {
+    use winapi::um::synchapi::WaitForSingleObject;
+    unsafe {
+        if WaitForSingleObject(pid, INFINITE) == WAIT_FAILED {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+pub fn close_process_handle(p: Process) -> Result<()> {
+    unsafe {
+        if CloseHandle(p) == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -196,11 +216,5 @@ fn ensure_no_nuls<T: AsRef<OsStr>>(str: T) -> io::Result<T> {
         ))
     } else {
         Ok(str)
-    }
-}
-
-pub fn close_process_handle(p: Process) {
-    unsafe {
-        CloseHandle(p);
     }
 }

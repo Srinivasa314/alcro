@@ -193,11 +193,11 @@ impl Chrome {
     }
 
     pub fn done(&self) -> bool {
-        exited(self.pid as Process)
+        exited(self.pid as Process).expect("Error in getting process state")
     }
 
     pub fn wait_finish(&self) {
-        wait_proc(self.pid as Process)
+        wait_proc(self.pid as Process).expect("Error in waiting for process")
     }
 }
 

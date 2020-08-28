@@ -229,7 +229,7 @@ impl Drop for UI {
             self.wait_finish();
         }
         #[cfg(target_family = "windows")]
-        close_handle(self.chrome.clone());
+        close_handle(self.chrome.clone()).expect("Unable to close handle");
     }
 }
 

@@ -65,20 +65,34 @@ pub fn new_process(path: &str, args: &[&str]) -> (Process, PipeReader, PipeWrite
     }
 }
 
-pub fn kill_proc(p: Process) {
+pub fn kill_proc(p: Process) -> std::io::Result<()> {
     unsafe {
-        kill(p, SIGTERM);
+        if kill(p, SIGTERM) == -1 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
     }
 }
 
-pub fn exited(pid: Process) -> bool {
-    let mut status = 0;
-    unsafe { waitpid(pid, &mut status, WNOHANG) != 0 }
-}
-
-pub fn wait_proc(pid: Process) {
+pub fn exited(pid: Process) -> std::io::Result<bool> {
     let mut status = 0;
     unsafe {
-        waitpid(pid, &mut status, 0);
+        match waitpid(pid, &mut status, WNOHANG) {
+            0 => Ok(false),
+            -1 => Err(std::io::Error::last_os_error()),
+            _ => Ok(true),
+        }
+    }
+}
+
+pub fn wait_proc(pid: Process) -> std::io::Result<()> {
+    let mut status = 0;
+    unsafe {
+        if waitpid(pid, &mut status, 0) == -1 {
+            return Err(std::io::Error::last_os_error());
+        } else {
+            Ok(())
+        }
     }
 }
