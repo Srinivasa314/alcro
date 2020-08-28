@@ -1,7 +1,6 @@
 #![windows_subsystem = "windows"]
 use actix_web::{body::Body, web, App, HttpRequest, HttpResponse, HttpServer};
 use alcro::{Content, UIBuilder};
-use futures::future::Future;
 use mime_guess::from_path;
 use rust_embed::RustEmbed;
 use std::{borrow::Cow, sync::mpsc, thread};
