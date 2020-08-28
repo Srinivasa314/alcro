@@ -171,17 +171,16 @@ impl UI {
     /// use serde_json::to_value;
     ///
     /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().expect("Unable to launch");
-    /// ui.bind("add", |args| {
+    /// ui.bind("add",|args| {
     ///     let mut sum = 0;
     ///     for arg in args {
-    ///         if arg.is_i64() {
-    ///             sum += arg.as_i64().unwrap();
-    ///         } else {
-    ///             return Err(to_value("Not a number").unwrap());
+    ///         match arg.as_i64() {
+    ///             Some(i) => sum+=i,
+    ///             None => return Err(to_value("Not number").unwrap())
     ///         }
     ///     }
-    ///     Ok(to_value(sum).unwrap())
-    /// }).expect("Unable to bind function");
+    ///     Ok(to_value(product).unwrap())
+    /// });
     /// assert_eq!(ui.eval("(async () => await add(1,2,3))();").unwrap(), 6);
     /// assert!(ui.eval("(async () => await add(1,2,'hi'))();").is_err());
     /// ```
