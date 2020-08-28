@@ -55,12 +55,7 @@ pub fn new_process(path: &str, args: &[&str]) -> (Process, PipeReader, PipeWrite
             .collect::<Vec<_>>();
 
         let mut args_ptr_list = vec![path.as_ptr() as *const c_char];
-        args_ptr_list.append(
-            &mut args
-                .iter()
-                .map(|s| s.as_ptr() as *const c_char)
-                .collect(),
-        );
+        args_ptr_list.append(&mut args.iter().map(|s| s.as_ptr() as *const c_char).collect());
         args_ptr_list.push(NULL());
 
         unsafe {
