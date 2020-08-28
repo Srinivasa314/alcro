@@ -1,5 +1,4 @@
 use super::{PipeReader, PipeWriter};
-use libc::*;
 use std::ptr::null_mut as NULL;
 
 #[repr(packed)]
@@ -25,7 +24,7 @@ fn l(string: &str) -> Vec<u16> {
 
 use std::mem::*;
 use winapi::shared::minwindef::{TRUE, *};
-use winapi::shared::{basetsd::*, ntdef::HANDLE};
+use winapi::shared::ntdef::HANDLE;
 use winapi::um::fileapi::*;
 use winapi::um::handleapi::*;
 use winapi::um::minwinbase::*;

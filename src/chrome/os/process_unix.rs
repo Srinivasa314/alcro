@@ -90,7 +90,7 @@ pub fn wait_proc(pid: Process) -> std::io::Result<()> {
     let mut status = 0;
     unsafe {
         if waitpid(pid, &mut status, 0) == -1 {
-            return Err(std::io::Error::last_os_error());
+            Err(std::io::Error::last_os_error())
         } else {
             Ok(())
         }

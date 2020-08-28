@@ -269,7 +269,7 @@ impl<'a> UIBuilder<'a> {
         }
     }
 
-    /// Return the UI instance
+    /// Return the UI instance. It returns the Err variant if any error occurs.
     pub fn run(&self) -> Result<UI, Box<dyn std::error::Error>> {
         let html: String;
         let url = match self.content {
