@@ -31,7 +31,7 @@ impl PipeWriter {
         use std::io::Write;
         Ok(self
             .pipe
-            .write(std::ffi::CString::new(message)?.as_bytes())?)
+            .write(std::ffi::CString::new(message)?.as_bytes_with_nul())?)
     }
 }
 
