@@ -10,7 +10,7 @@ Thus rust functions can be called from the UI and javascript can be called Rust.
 Alcro works similarily to the go library [lorca](https://github.com/zserge/lorca) so the name alcro is an anagram of lorca.
 
 ## Documentation
-[docs.rs](https://docs.rs/alcro/0.1.7/alcro/)
+[docs.rs](https://docs.rs/alcro/0.2.0/alcro/)
 
 ## Examples
 [https://github.com/Srinivasa314/alcro/tree/master/examples](https://github.com/Srinivasa314/alcro/tree/master/examples)
