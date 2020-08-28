@@ -10,7 +10,7 @@
 //! use alcro::{UIBuilder, Content};
 //! use serde_json::to_value;
 //!
-//! let ui = UIBuilder::new().content(Content::Html("<html><body>Close Me!</body></html>")).run();
+//! let ui = UIBuilder::new().content(Content::Html("<html><body>Close Me!</body></html>")).run().expect("Unable to launch");
 //! assert_eq!(ui.eval("document.body.innerText").unwrap(), "Close Me!");
 //!
 //! //Expose rust function to js
@@ -85,43 +85,46 @@ impl UI {
         width: i32,
         height: i32,
         custom_args: &[&str],
-    ) -> UI {
-        let _tmpdir: Option<tempdir::TempDir>;
+    ) -> Result<UI, Box<dyn std::error::Error>> {
+        let _tmpdir;
         let dir = match dir {
             Some(dir) => {
                 _tmpdir = None;
                 dir
             }
             None => {
-                _tmpdir =
-                    Some(tempdir::TempDir::new("alcro").expect("Cannot create temp directory"));
+                _tmpdir = Some(tempdir::TempDir::new("alcro")?);
                 _tmpdir.as_ref().unwrap().path()
             }
         };
 
-        let mut args: Vec<String> = Vec::from(DEFAULT_CHROME_ARGS)
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect();
-        args.push(format!("--user-data-dir={}", dir.to_str().unwrap()));
-        args.push(format!("--window-size={},{}", width, height));
+        let mut args = Vec::from(DEFAULT_CHROME_ARGS);
+        let user_data_dir_arg = format!(
+            "--user-data-dir={}",
+            dir.to_str().ok_or("Directory not valid UTF-8")?
+        );
+        args.push(&user_data_dir_arg);
+        let window_size_arg = format!("--window-size={},{}", width, height);
+        args.push(&window_size_arg);
         for arg in custom_args {
-            args.push((*arg).to_string())
+            args.push(arg)
         }
-        args.push("--remote-debugging-pipe".to_string());
+        args.push("--remote-debugging-pipe");
 
+        let app_arg;
         if custom_args.contains(&"--headless") {
-            args.push(url.to_string());
+            args.push(url);
         } else {
-            args.push(format!("--app={}", url));
+            app_arg = format!("--app={}", url);
+            args.push(&app_arg);
         }
 
-        let chrome = Chrome::new_with_args(locate_chrome(), args);
-        UI {
+        let chrome = Chrome::new_with_args(&locate_chrome()?, &args)?;
+        Ok(UI {
             chrome,
             _tmpdir,
             waited: AtomicBool::new(false),
-        }
+        })
     }
 
     /// Returns true if the browser is closed
@@ -167,7 +170,7 @@ impl UI {
     /// use alcro::UIBuilder;
     /// use serde_json::to_value;
     ///
-    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run();
+    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().expect("Unable to launch");
     /// ui.bind("add", |args| {
     ///     let mut sum = 0;
     ///     for arg in args {
@@ -178,7 +181,7 @@ impl UI {
     ///         }
     ///     }
     ///     Ok(to_value(sum).unwrap())
-    /// }).unwrap();
+    /// }).expect("Unable to bind function");
     /// assert_eq!(ui.eval("(async () => await add(1,2,3))();").unwrap(), 6);
     /// assert!(ui.eval("(async () => await add(1,2,'hi'))();").is_err());
     /// ```
@@ -196,7 +199,7 @@ impl UI {
     /// ```
     /// #![windows_subsystem = "windows"]
     /// use alcro::UIBuilder;
-    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run();
+    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().expect("Unable to launch");
     /// assert_eq!(ui.eval("1+1").unwrap(), 2);
     /// assert_eq!(ui.eval("'Hello'+' World'").unwrap(), "Hello World");
     /// assert!(ui.eval("xfgch").is_err());
@@ -268,7 +271,7 @@ impl<'a> UIBuilder<'a> {
     }
 
     /// Return the UI instance
-    pub fn run(&self) -> UI {
+    pub fn run(&self) -> Result<UI, Box<dyn std::error::Error>> {
         let html: String;
         let url = match self.content {
             Content::Url(u) => u,

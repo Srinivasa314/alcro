@@ -34,7 +34,7 @@ fn assets(req: HttpRequest) -> HttpResponse {
     }
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (server_tx, server_rx) = mpsc::channel();
     let (port_tx, port_rx) = mpsc::channel();
 
@@ -69,9 +69,10 @@ fn main() {
     let ui = UIBuilder::new()
         .content(Content::Url(&format!("http://127.0.0.1:{}", port)))
         .size(400, 400)
-        .run();
+        .run()?;
 
     ui.wait_finish();
     // gracefully shutdown actix web server
     let _ = server.stop(true).wait();
+    Ok(())
 }

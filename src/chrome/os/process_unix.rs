@@ -4,7 +4,7 @@ use std::ptr::null_mut as NULL;
 
 pub type Process = libc::pid_t;
 
-pub fn new_process(mut path: String, args: &mut [String]) -> (Process, PipeReader, PipeWriter) {
+pub fn new_process(path: &str, args: &[&str]) -> (Process, PipeReader, PipeWriter) {
     const READ_END: usize = 0;
     const WRITE_END: usize = 1;
 
@@ -27,10 +27,12 @@ pub fn new_process(mut path: String, args: &mut [String]) -> (Process, PipeReade
         let readp: PipeReader;
         let writep: PipeWriter;
         unsafe {
+            use std::fs::File;
+            use std::os::unix::io::FromRawFd;
             close(pipe3[READ_END]);
             close(pipe4[WRITE_END]);
-            writep = PipeWriter::new(pipe3[WRITE_END]);
-            readp = PipeReader::new(pipe4[READ_END]);
+            writep = PipeWriter::new(File::from_raw_fd(pipe3[WRITE_END]));
+            readp = PipeReader::new(File::from_raw_fd(pipe4[READ_END]));
         }
         (childpid, readp, writep)
     } else {
@@ -46,16 +48,13 @@ pub fn new_process(mut path: String, args: &mut [String]) -> (Process, PipeReade
             dup2(pipe4[WRITE_END], 4);
         }
 
-        path.push('\0');
-        for arg in args.iter_mut() {
-            arg.push('\0')
-        }
+        let path = std::ffi::CString::new(path).unwrap();
 
         let mut args_ptr_list = vec![path.as_ptr() as *const c_char];
         args_ptr_list.append(
             &mut args
-                .iter_mut()
-                .map(|s| s.as_ptr() as *const c_char)
+                .iter()
+                .map(|s| std::ffi::CString::new(*s).unwrap().as_ptr() as *const c_char)
                 .collect::<Vec<*const c_char>>(),
         );
         args_ptr_list.push(NULL());

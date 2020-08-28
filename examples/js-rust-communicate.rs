@@ -2,10 +2,10 @@
 use alcro::{Content, UIBuilder};
 use serde_json::to_value;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui = UIBuilder::new()
         .content(Content::Html(include_str!("js-rust-communicate.html")))
-        .run();
+        .run()?;
 
     //Rust calling JS
     assert_eq!(
@@ -13,8 +13,7 @@ fn main() {
             .unwrap(),
         "JS Rust Communication"
     );
-    ui.eval("document.getElementById('result').innerText='Type the file name in the input box and click the button the result will be displayed'")
-        .unwrap();
+    ui.eval("document.getElementById('result').innerText='Type the file name in the input box and click the button the result will be displayed'").map_err(|e|e.to_string())?;
 
     ui.bind("readFile", |args| {
         if args.len() == 0 {
@@ -29,6 +28,7 @@ fn main() {
             }
         }
     })
-    .unwrap();
+    .map_err(|e| e.to_string())?;
     ui.wait_finish();
+    Ok(())
 }

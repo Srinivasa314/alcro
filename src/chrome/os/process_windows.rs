@@ -35,7 +35,7 @@ use winapi::um::processthreadsapi::*;
 use winapi::um::winbase::*;
 use winapi::um::winnt::*;
 
-pub fn new_process(path: String, args: &mut [String]) -> (Process, PipeReader, PipeWriter) {
+pub fn new_process(path: &str, args: &[&str]) -> (Process, PipeReader, PipeWriter) {
     unsafe {
         let size_sa = size_of::<SECURITY_ATTRIBUTES>() as u32;
         let mut sa = SECURITY_ATTRIBUTES {
@@ -117,8 +117,7 @@ pub fn new_process(path: String, args: &mut [String]) -> (Process, PipeReader, P
         startupinfo.StartupInfo.lpReserved2 = &mut stdio_buffer as *mut StdioBuffer5 as LPBYTE;
 
         let args: Vec<OsString> = args.iter().map(OsString::from).collect();
-        let mut cmd_str = make_command_line(&OsString::from(&path), &args).unwrap();
-        cmd_str.push(0);
+        let mut cmd_str = make_command_line(&OsString::from(path), &args).unwrap();
         CreateProcessW(
             NULL(),
             cmd_str.as_mut_ptr(),
@@ -136,8 +135,10 @@ pub fn new_process(path: String, args: &mut [String]) -> (Process, PipeReader, P
         CloseHandle(readpipe3);
         CloseHandle(writepipe4);
 
-        let writep = PipeWriter::new(open_osfhandle(writepipe3 as isize, O_WRONLY));
-        let readp = PipeReader::new(open_osfhandle(readpipe4 as isize, O_RDONLY));
+        use std::fs::File;
+        use std::os::windows::io::FromRawHandle;
+        let writep = PipeWriter::new(File::from_raw_handle(writepipe3));
+        let readp = PipeReader::new(File::from_raw_handle(readpipe4));
         (processinfo.hProcess, readp, writep)
     }
 }
@@ -167,6 +168,7 @@ fn make_command_line(prog: &OsStr, args: &[OsString]) -> io::Result<Vec<u16>> {
         cmd.push(' ' as u16);
         append_arg(&mut cmd, arg, false)?;
     }
+    cmd.push('\0' as u16);
     Ok(cmd)
 }
 fn append_arg(cmd: &mut Vec<u16>, arg: &OsStr, force_quotes: bool) -> io::Result<()> {

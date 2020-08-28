@@ -1,77 +1,37 @@
-use libc::*;
-const BUFSIZE: usize = 1024;
-
-pub struct PipeWriter {
-    fd: c_int,
-}
-
-#[cfg(target_family = "unix")]
-type Size = size_t;
-
-#[cfg(target_family = "windows")]
-type Size = c_uint;
-
-impl PipeWriter {
-    pub fn write(&mut self, mut msg: String) {
-        msg.push('\0');
-        unsafe {
-            write(self.fd, msg.as_ptr() as *const c_void, msg.len() as Size);
-        }
-    }
-
-    unsafe fn new(fd: c_int) -> Self {
-        Self { fd }
-    }
-}
-
 pub struct PipeReader {
-    fd: c_int,
-    extra_buffer: Vec<u8>,
+    pipe: std::io::BufReader<std::fs::File>,
 }
 
 impl PipeReader {
-    unsafe fn new(fd: c_int) -> PipeReader {
-        PipeReader {
-            fd,
-            extra_buffer: vec![],
+    pub fn new(f: std::fs::File) -> Self {
+        Self {
+            pipe: std::io::BufReader::new(f),
         }
     }
 
-    pub fn read(&mut self) -> String {
-        let mut resbuf: [u8; BUFSIZE] = [0; BUFSIZE];
-        let mut s: Vec<u8> = vec![];
-        let mut nbytes = self.extra_buffer.len();
+    pub fn read(&mut self) -> Result<String, Box<dyn std::error::Error>> {
+        use std::io::BufRead;
+        let mut bytes_to_read = vec![];
+        self.pipe.read_until(0, &mut bytes_to_read)?;
+        bytes_to_read.pop();
+        Ok(String::from_utf8(bytes_to_read)?)
+    }
+}
 
-        if !self.extra_buffer.is_empty() {
-            resbuf[..self.extra_buffer.len()].clone_from_slice(&self.extra_buffer);
-        }
+pub struct PipeWriter {
+    pipe: std::fs::File,
+}
 
-        loop {
-            if self.extra_buffer.is_empty() {
-                unsafe {
-                    nbytes =
-                        read(self.fd, resbuf.as_mut_ptr() as *mut c_void, BUFSIZE as Size) as usize;
-                }
-            } else {
-                self.extra_buffer.clear();
-            }
-            if nbytes == 0 {
-                break;
-            }
-            let index = resbuf[..nbytes].iter().position(|x| *x == 0);
-            let len = match index {
-                Some(index) => index,
-                None => nbytes,
-            };
-            s.extend_from_slice(&resbuf[0..len]);
-            if index.is_some() && len + 1 < nbytes {
-                self.extra_buffer = resbuf[(len + 1)..nbytes].to_vec();
-            }
-            if index.is_some() {
-                break;
-            }
-        }
-        unsafe { String::from_utf8_unchecked(s) }
+impl PipeWriter {
+    pub fn new(f: std::fs::File) -> Self {
+        Self { pipe: f }
+    }
+
+    pub fn write(&mut self, message: &str) -> Result<usize, Box<dyn std::error::Error>> {
+        use std::io::Write;
+        Ok(self
+            .pipe
+            .write(std::ffi::CString::new(message)?.as_bytes())?)
     }
 }
 

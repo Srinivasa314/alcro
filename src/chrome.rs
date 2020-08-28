@@ -80,7 +80,7 @@ impl WindowState {
 }
 
 impl Chrome {
-    pub fn new_with_args(chrome_binary: String, mut args: Vec<String>) -> Arc<Chrome> {
+    pub fn new_with_args(chrome_binary: &str, mut args: &[&str]) -> Result<Arc<Chrome>, String> {
         let (pid, precv, psend) = new_process(chrome_binary, &mut args);
         let (kill_send, kill_recv) = bounded(1);
 
@@ -98,7 +98,7 @@ impl Chrome {
         };
 
         c.target = c.find_target();
-        c.session = c.start_session();
+        c.session = c.start_session()?;
 
         let c_arc = Arc::new(c);
 
@@ -125,20 +125,20 @@ impl Chrome {
         ]
         .iter()
         {
-            send(Arc::clone(&c_arc), method, args).unwrap();
+            send(Arc::clone(&c_arc), method, args).map_err(|e| e.to_string())?;
         }
 
-        if !args.contains(&"--headless".to_string()) {
-            let win_id = get_window_for_target(Arc::clone(&c_arc)).unwrap();
+        if !args.contains(&"--headless") {
+            let win_id = get_window_for_target(Arc::clone(&c_arc)).map_err(|e| e.to_string())?;
             Arc::clone(&c_arc).window.store(win_id, Ordering::Relaxed);
         }
-        c_arc
+        Ok(c_arc)
     }
 
     fn find_target(&self) -> String {
         send_msg(
             &self.psend,
-            json!(
+            &json!(
             {
             "id": 0,
             "method": "Target.setDiscoverTargets",
@@ -149,23 +149,24 @@ impl Chrome {
         );
 
         loop {
-            let pmsg: JSObject = serde_json::from_str(&recv_msg(&self.precv)).unwrap();
+            let pmsg: JSObject =
+                serde_json::from_str(&recv_msg(&self.precv)).expect("Invalid JSON");
             if pmsg["method"] == "Target.targetCreated" {
                 let params = &pmsg["params"];
                 if params["targetInfo"]["type"] == "page" {
                     return params["targetInfo"]["targetId"]
                         .as_str()
-                        .unwrap()
+                        .expect("Value not of string datatype")
                         .to_string();
                 }
             }
         }
     }
 
-    fn start_session(&self) -> String {
+    fn start_session(&self) -> Result<String, String> {
         send_msg(
             &self.psend,
-            json!(
+            &json!(
             {
             "id": 1,
             "method": "Target.attachToTarget",
@@ -176,13 +177,17 @@ impl Chrome {
         );
 
         loop {
-            let pmsg: JSObject = serde_json::from_str(&recv_msg(&self.precv)).unwrap();
+            let pmsg: JSObject =
+                serde_json::from_str(&recv_msg(&self.precv)).expect("Invalid JSON");
             if pmsg["id"] == 1 {
                 if pmsg["error"] != JSObject::Null {
-                    panic!(pmsg["error"].to_string())
+                    return Err(pmsg["error"].to_string());
                 }
                 let session = &pmsg["result"];
-                return session["sessionId"].as_str().unwrap().to_string();
+                return Ok(session["sessionId"]
+                    .as_str()
+                    .expect("Value not of string datatype")
+                    .to_string());
             }
         }
     }
@@ -204,7 +209,7 @@ fn get_window_for_target(c: Arc<Chrome>) -> Result<i32, JSObject> {
             "targetId": c.target
         }),
     ) {
-        Ok(v) => Ok(v["windowId"].as_i64().unwrap() as i32),
+        Ok(v) => Ok(v["windowId"].as_i64().expect("Value not i64") as i32),
         Err(e) => Err(e),
     }
 }
@@ -247,7 +252,8 @@ pub fn bounds(c: Arc<Chrome>) -> Result<Bounds, JSObject> {
     ) {
         Err(e) => Err(e),
         Ok(result) => {
-            let ret: Bounds = serde_json::from_value(result["bounds"].clone()).unwrap();
+            let ret: Bounds = serde_json::from_value(result["bounds"].clone())
+                .expect("Value not of bounds datatype");
             Ok(ret)
         }
     }
@@ -307,7 +313,11 @@ pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> JSResult {
 }
 
 pub fn close(c: Arc<Chrome>) {
-    std::thread::spawn(move || send(c, "Browser.close", &json!({})).unwrap());
+    std::thread::spawn(move || {
+        if let Err(e) = send(c, "Browser.close", &json!({})) {
+            eprintln!("{}", e);
+        }
+    });
 }
 
 #[cfg(target_family = "windows")]

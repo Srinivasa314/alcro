@@ -42,38 +42,38 @@ fn paths() -> [String; 7] {
     ]
 }
 
-pub fn locate_chrome() -> String {
+pub fn locate_chrome() -> Result<String, Box<dyn std::error::Error>> {
     for path in paths().iter() {
         if Path::new(path).exists() {
-            return path.to_string();
+            return Ok(path.to_string());
         }
     }
-    prompt_download();
-    panic!("Chrome not found!");
+    prompt_download()?;
+    Err("Chrome not found!")?
 }
 
 use std::process::Command;
 
-fn prompt_download() {
+fn prompt_download() -> std::io::Result<()> {
     let title = "Chrome not found";
     let text =
         "No Chrome/Chromium installation was found. Would you like to download and install it now?";
 
     if message_box_yes_no(title, text, MessageBoxIcon::Question, YesNo::Yes) == YesNo::No {
-        return;
+        return Ok(());
     }
 
     let url = "https://www.google.com/chrome/";
 
     #[cfg(target_os = "linux")]
-    Command::new("xdg-open").arg(url).spawn().unwrap();
+    Command::new("xdg-open").arg(url).spawn()?;
     #[cfg(target_os = "macos")]
-    Command::new("open").arg(url).spawn().unwrap();
+    Command::new("open").arg(url).spawn()?;
     #[cfg(target_os = "windows")]
     Command::new("cmd")
         .arg("/c")
         .arg("start")
         .arg(url)
-        .spawn()
-        .unwrap();
+        .spawn()?;
+    Ok(())
 }
