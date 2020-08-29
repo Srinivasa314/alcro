@@ -4,7 +4,7 @@ use crossbeam_channel::{bounded, Sender};
 use serde_json::json;
 use std::sync::{atomic::Ordering, Arc, Mutex};
 
-pub fn send_msg(p: &Mutex<PipeWriter>, message: &str) {
+pub fn send_msg(p: &Mutex<PipeWriter>, message: String) {
     p.lock()
         .expect("Unable to lock")
         .write(message)
@@ -90,7 +90,7 @@ pub fn send(c: Arc<Chrome>, method: &str, params: &JSObject) -> JSResult {
 
     send_msg(
         &c.psend,
-        &json!({
+        json!({
             "id":id,
             "method":"Target.sendMessageToTarget",
             "params":json!({

@@ -27,7 +27,7 @@ impl PipeWriter {
         Self { pipe: f }
     }
 
-    pub fn write(&mut self, message: &str) -> Result<usize, Box<dyn std::error::Error>> {
+    pub fn write(&mut self, message: String) -> Result<usize, Box<dyn std::error::Error>> {
         use std::io::Write;
         Ok(self
             .pipe

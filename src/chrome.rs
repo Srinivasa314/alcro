@@ -138,7 +138,7 @@ impl Chrome {
     fn find_target(&self) -> String {
         send_msg(
             &self.psend,
-            &json!(
+            json!(
             {
             "id": 0,
             "method": "Target.setDiscoverTargets",
@@ -166,7 +166,7 @@ impl Chrome {
     fn start_session(&self) -> Result<String, String> {
         send_msg(
             &self.psend,
-            &json!(
+            json!(
             {
             "id": 1,
             "method": "Target.attachToTarget",
