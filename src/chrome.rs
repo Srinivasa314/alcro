@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crossbeam_channel::{bounded, Sender};
@@ -35,7 +34,7 @@ pub struct Chrome {
     kill_send: Sender<()>,
     pending: dashmap::DashMap<i32, Sender<JSResult>>,
     window: AtomicI32,
-    bindings: Mutex<HashMap<String, BindingFunc>>,
+    bindings: dashmap::DashMap<String, BindingFunc>,
 }
 
 /// A struct that stores the size, position and window state of the browser window.
@@ -92,7 +91,7 @@ impl Chrome {
             session: String::new(),
             window: AtomicI32::new(0),
             pending: dashmap::DashMap::new(),
-            bindings: Mutex::new(HashMap::new()),
+            bindings: dashmap::DashMap::new(),
             kill_send,
             pid: pid as usize,
         };
@@ -260,10 +259,7 @@ pub fn bounds(c: Arc<Chrome>) -> Result<Bounds, JSObject> {
 }
 
 pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> JSResult {
-    {
-        let mut bindings = c.bindings.lock().unwrap();
-        bindings.insert(name.to_string(), f);
-    }
+    c.bindings.insert(name.to_string(), f);
 
     if let Err(e) = send(
         Arc::clone(&c),

@@ -1,4 +1,4 @@
-use super::{BindingFunc, Chrome, JSObject, JSResult};
+use super::{Chrome, JSObject, JSResult};
 use super::{PipeReader, PipeWriter};
 use crossbeam_channel::{bounded, Sender};
 use serde_json::json;
@@ -125,15 +125,10 @@ fn send_result(reschan: &Sender<JSResult>, res: &JSObject) {
 }
 
 fn binding_called(c: Arc<Chrome>, name: &str, payload: JSObject, context_id: i64) {
-    let binding: Option<BindingFunc>;
-    {
-        let bindings = c.bindings.lock().unwrap();
-        binding = match bindings.get(name) {
-            Some(b) => Some(Arc::clone(b)),
-            None => None,
-        }
-    }
-
+    let binding = match c.bindings.get(name) {
+        Some(b) => Some(Arc::clone(&*b)),
+        None => None,
+    };
     if let Some(binding) = binding {
         let c = Arc::clone(&c);
         std::thread::spawn(move || {
