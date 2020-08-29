@@ -16,6 +16,7 @@ crossbeam-channel = "0.4.3"
 tinyfiledialogs = "3.3.10"
 libc = "0.2.76"
 serde_derive = "1.0.115"
+dashmap = "3.11.10"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = ["namedpipeapi" , "synchapi" , "handleapi" ] }

@@ -61,16 +61,15 @@ pub fn readloop(c: Arc<Chrome>) {
                 );
                 continue;
             } else if res["id"].is_i64() {
-                let mut pending = c.pending.lock().unwrap();
                 let res_id = res["id"].as_i64().expect("Expected i64") as i32;
 
-                match pending.get(&res_id) {
+                match c.pending.get(&res_id) {
                     None => continue,
                     Some(reschan) => {
-                        send_result(reschan, &res);
+                        send_result(&*reschan, &res);
                     }
                 }
-                pending.remove(&res_id);
+                c.pending.remove(&res_id);
             }
         }
     }
@@ -84,9 +83,7 @@ pub fn send(c: Arc<Chrome>, method: &str, params: &JSObject) -> JSResult {
         "params":params
     });
     let (s, r) = bounded(1);
-    {
-        c.pending.lock().unwrap().insert(id, s);
-    };
+    c.pending.insert(id, s);
 
     send_msg(
         &c.psend,

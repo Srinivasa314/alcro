@@ -33,7 +33,7 @@ pub struct Chrome {
     target: String,
     session: String,
     kill_send: Sender<()>,
-    pending: Mutex<HashMap<i32, Sender<JSResult>>>,
+    pending: dashmap::DashMap<i32, Sender<JSResult>>,
     window: AtomicI32,
     bindings: Mutex<HashMap<String, BindingFunc>>,
 }
@@ -91,7 +91,7 @@ impl Chrome {
             target: String::new(),
             session: String::new(),
             window: AtomicI32::new(0),
-            pending: Mutex::new(HashMap::new()),
+            pending: dashmap::DashMap::new(),
             bindings: Mutex::new(HashMap::new()),
             kill_send,
             pid: pid as usize,
