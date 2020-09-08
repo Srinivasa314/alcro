@@ -77,3 +77,12 @@ fn prompt_download() -> std::io::Result<()> {
         .spawn()?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_locate_chrome() {
+        assert!(locate_chrome().is_ok())
+    }
+}
