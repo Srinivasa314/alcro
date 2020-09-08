@@ -13,7 +13,7 @@ matrix:
         - choco install googlechrome 
 
 script:
-  - cargo test --doc
+  - cargo test
 
 addons:
   chrome: stable
