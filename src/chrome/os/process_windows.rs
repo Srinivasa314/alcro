@@ -1,7 +1,7 @@
 use super::{PipeReader, PipeWriter};
 use std::ptr::null_mut as NULL;
 
-#[repr(C)]
+#[repr(packed)]
 struct StdioBuffer5 {
     no_fds: u32,
     flags: [u8; 5],
