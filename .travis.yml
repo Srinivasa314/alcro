@@ -10,7 +10,7 @@ matrix:
       osx_image: xcode9.4
     - os: windows
       before_script:
-        - choco install googlechrome 
+        - choco install googlechrome --ignore-checksums
 
 script:
   - cargo test
