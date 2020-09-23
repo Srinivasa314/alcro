@@ -21,6 +21,9 @@ pub fn recv_msg(p: &Mutex<PipeReader>) -> String {
 pub fn readloop(c: Arc<Chrome>) {
     loop {
         let pmsg = recv_msg(&c.precv);
+        if pmsg.is_empty() {
+            break;
+        }
         let pmsg: JSObject = serde_json::from_str(&pmsg).expect("Invalid JSON");
 
         if pmsg["method"] == "Target.targetDestroyed" {
