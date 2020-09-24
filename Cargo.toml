@@ -1,6 +1,6 @@
 [package]
 name = "alcro"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["Srinivasa <m.srinivasa1234@gmail.com>"]
 edition = "2018"
 description = "A library to create desktop apps using rust and modern web technologies"
