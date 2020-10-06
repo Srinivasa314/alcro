@@ -119,7 +119,8 @@ impl UI {
             args.push(&app_arg);
         }
 
-        let chrome = Chrome::new_with_args(&locate_chrome()?, &args)?;
+        let chrome_path=std::env::var("ALCRO_BROWSER_PATH").or_else(|_|locate_chrome())?;
+        let chrome = Chrome::new_with_args(&chrome_path, &args)?;
         Ok(UI {
             chrome,
             _tmpdir,
