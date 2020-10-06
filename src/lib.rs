@@ -29,6 +29,9 @@
 //! assert!(ui.eval("(async () => await product(1,2,'hi'))();").is_err());
 //! ui.wait_finish();
 //! ```
+//!
+//! To change the path of the browser launched set the ALCRO_BROWSER_PATH environment variable. Only Chromium based browsers work.
+//!
 
 mod chrome;
 #[cfg(target_family = "windows")]
