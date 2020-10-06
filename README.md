@@ -7,7 +7,7 @@ A small library to build desktop apps using rust and modern web technologies. It
 Thus rust functions can be called from the UI and javascript can be called Rust.
 
 #### Name
-Alcro works similarily to the go library [lorca](https://github.com/zserge/lorca) so the name alcro is an anagram of lorca.
+Alcro works similarily to the go library [lorca](https://github.com/zserge/lorca) so the name alcro is an anagram of lorca. However it uses pipes unlike lorca which uses a websocket. 
 
 ## Documentation
 [docs.rs](https://docs.rs/alcro/0.2.1/alcro/)
