@@ -35,7 +35,7 @@
 
 mod chrome;
 #[cfg(target_family = "windows")]
-use chrome::close_handle;
+use chrome::{close_handle, load_css, load_js};
 use chrome::{bind, bounds, close, eval, load, set_bounds, Chrome};
 pub use chrome::{Bounds, JSObject, JSResult, WindowState};
 mod locate;
@@ -195,6 +195,18 @@ impl UI {
         bind(self.chrome.clone(), name, Arc::new(f))
     }
 
+    /// Evaluates js code and adds functions before document loads.
+
+    pub fn load_js(&self, script: &str) -> JSResult {
+        load_js(self.chrome.clone(), script)
+    }
+
+    /// Loads css into current window.
+
+    pub fn load_css(&self, css: &str) -> JSResult {
+        load_css(self.chrome.clone(), css)
+    }
+    
     /// Evaluates js code and returns the result.
     ///
     /// # Examples

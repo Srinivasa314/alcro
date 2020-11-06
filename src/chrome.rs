@@ -121,6 +121,8 @@ impl Chrome {
             ("Security.enable", JSObject::Null),
             ("Performance.enable", JSObject::Null),
             ("Log.enable", JSObject::Null),
+            ("DOM.enable", JSObject::Null),
+            ("CSS.enable", JSObject::Null),
         ]
         .iter()
         {
@@ -256,6 +258,26 @@ pub fn bounds(c: Arc<Chrome>) -> Result<Bounds, JSObject> {
             Ok(ret)
         }
     }
+}
+
+pub fn load_js(c: Arc<Chrome>, script: &str) -> JSResult {
+    let script = String::from(script);
+    if let Err(e) = send(
+        Arc::clone(&c),
+        "Page.addScriptToEvaluateOnNewDocument",
+        &json!({ "source": script }),
+    ) {
+        return Err(e);
+    }
+    eval(Arc::clone(&c), &script)
+}
+
+pub fn load_css(c: Arc<Chrome>, css: &str) -> JSResult {
+    let frame_tree = send(Arc::clone(&c), "Page.getFrameTree", &json!({ "targetId": c.target })).unwrap();
+    let frame_id = frame_tree["frameTree"]["frame"]["id"].as_str().unwrap();
+    let style_sheet = send(Arc::clone(&c), "CSS.createStyleSheet", &json!({ "frameId": frame_id })).unwrap();
+    let style_sheet_id = style_sheet["styleSheetId"].as_str().unwrap();
+    send(Arc::clone(&c), "CSS.setStyleSheetText", &json!({ "styleSheetId": style_sheet_id, "text": css }))
 }
 
 pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> JSResult {
