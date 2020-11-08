@@ -35,8 +35,8 @@
 
 mod chrome;
 #[cfg(target_family = "windows")]
-use chrome::close_handle;
-use chrome::{bind, bounds, close, eval, load, set_bounds, Chrome};
+use chrome::{close_handle};
+use chrome::{bind, bounds, close, eval, load, set_bounds, load_css, load_js, Chrome};
 pub use chrome::{Bounds, JSObject, JSResult, WindowState};
 mod locate;
 use locate::locate_chrome;
@@ -194,7 +194,7 @@ impl UI {
     {
         bind(self.chrome.clone(), name, Arc::new(f))
     }
-
+    
     /// Evaluates js code and returns the result.
     ///
     /// # Examples
@@ -210,6 +210,45 @@ impl UI {
 
     pub fn eval(&self, js: &str) -> JSResult {
         eval(self.chrome.clone(), js)
+    }
+
+    /// Evaluates js code and adds functions before document loads. Loaded js is unloaded on reload.
+    ///
+    /// # Arguments
+    ///
+    /// * `script` - Javascript that should be loaded
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![windows_subsystem = "windows"]
+    /// use alcro::UIBuilder;
+    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().expect("Unable to launch");
+    /// ui.load_js("function loadedFunction() { return 'This function was loaded from rust'; }");
+    /// assert_eq!(ui.eval("loadedFunction()").unwrap(), "This function was loaded from rust");
+    /// ```
+
+    pub fn load_js(&self, script: &str) -> JSResult {
+        load_js(self.chrome.clone(), script)
+    }
+
+    /// Loads CSS into current window. Loaded CSS is unloaded on reload.
+    ///
+    /// # Arguments
+    ///
+    /// * `css` - CSS that should be loaded
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![windows_subsystem = "windows"]
+    /// use alcro::UIBuilder;
+    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().expect("Unable to launch");
+    /// ui.load_css("body {display: none;}");
+    /// ```
+
+    pub fn load_css(&self, css: &str) -> JSResult {
+        load_css(self.chrome.clone(), css)
     }
 
     /// It changes the size, position or state of the browser window specified by the `Bounds` struct. It returns Err if it fails.
