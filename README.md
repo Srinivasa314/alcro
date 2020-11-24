@@ -3,8 +3,8 @@
 [![Build Status](https://travis-ci.com/Srinivasa314/alcro.svg?branch=master)](https://travis-ci.com/Srinivasa314/alcro)
 [![Crates.io](https://img.shields.io/crates/v/alcro)](https://crates.io/crates/alcro)
 
-A small library to build desktop apps using rust and modern web technologies. It uses Chrom(e/ium) or similar browsers like MS Edge (new) for UI. It does not bundle chrome but instead communicates with the existing chrome installation.
-Thus rust functions can be called from the UI and javascript can be called Rust.
+A small library to build desktop apps using Rust and modern web technologies. It uses Chrom(e/ium) or similar browsers like MS Edge (new) for UI. It does not bundle Chrome but instead communicates with the existing Chrome installation.
+Thus Rust functions can be called from the UI and JavaScript can be called from Rust.
 
 #### Name
 Alcro works similarily to the go library [lorca](https://github.com/zserge/lorca) so the name alcro is an anagram of lorca. However it uses pipes unlike lorca which uses a websocket. 
@@ -31,5 +31,5 @@ Alcro works similarily to the go library [lorca](https://github.com/zserge/lorca
 * Requires Chrom(e/ium) to be installed
 * Native systray, etc. needs third party crates
 
-## Working
+## How it works
 Alcro uses the Chrome DevTools protocol and communicates with it via a pipe.
