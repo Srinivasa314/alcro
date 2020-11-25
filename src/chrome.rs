@@ -272,9 +272,15 @@ pub fn load_js(c: Arc<Chrome>, script: &str) -> JSResult {
 }
 
 pub fn load_css(c: Arc<Chrome>, css: &str) -> JSResult {
-    let frame_tree = send(Arc::clone(&c), "Page.getFrameTree", &json!({ "targetId": c.target })).unwrap();
+    let frame_tree = match send(Arc::clone(&c), "Page.getFrameTree", &json!({ "targetId": c.target })) {
+        Ok(ft)=>ft,
+        Err(e)=>return Err(e)
+    };
     let frame_id = frame_tree["frameTree"]["frame"]["id"].as_str().unwrap();
-    let style_sheet = send(Arc::clone(&c), "CSS.createStyleSheet", &json!({ "frameId": frame_id })).unwrap();
+    let style_sheet = match send(Arc::clone(&c), "CSS.createStyleSheet", &json!({ "frameId": frame_id })) {
+        Ok(ss)=>ss,
+        Err(e)=>return Err(e)
+    };
     let style_sheet_id = style_sheet["styleSheetId"].as_str().unwrap();
     send(Arc::clone(&c), "CSS.setStyleSheetText", &json!({ "styleSheetId": style_sheet_id, "text": css }))
 }
