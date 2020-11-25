@@ -261,7 +261,7 @@ pub fn bounds(c: Arc<Chrome>) -> Result<Bounds, JSObject> {
 }
 
 pub fn load_js(c: Arc<Chrome>, script: &str) -> JSResult {
-   if let Err(e) = send(
+    if let Err(e) = send(
         Arc::clone(&c),
         "Page.addScriptToEvaluateOnNewDocument",
         &json!({ "source": script }),
@@ -272,17 +272,29 @@ pub fn load_js(c: Arc<Chrome>, script: &str) -> JSResult {
 }
 
 pub fn load_css(c: Arc<Chrome>, css: &str) -> JSResult {
-    let frame_tree = match send(Arc::clone(&c), "Page.getFrameTree", &json!({ "targetId": c.target })) {
-        Ok(ft)=>ft,
-        Err(e)=>return Err(e)
+    let frame_tree = match send(
+        Arc::clone(&c),
+        "Page.getFrameTree",
+        &json!({ "targetId": c.target }),
+    ) {
+        Ok(ft) => ft,
+        Err(e) => return Err(e),
     };
     let frame_id = frame_tree["frameTree"]["frame"]["id"].as_str().unwrap();
-    let style_sheet = match send(Arc::clone(&c), "CSS.createStyleSheet", &json!({ "frameId": frame_id })) {
-        Ok(ss)=>ss,
-        Err(e)=>return Err(e)
+    let style_sheet = match send(
+        Arc::clone(&c),
+        "CSS.createStyleSheet",
+        &json!({ "frameId": frame_id }),
+    ) {
+        Ok(ss) => ss,
+        Err(e) => return Err(e),
     };
     let style_sheet_id = style_sheet["styleSheetId"].as_str().unwrap();
-    send(Arc::clone(&c), "CSS.setStyleSheetText", &json!({ "styleSheetId": style_sheet_id, "text": css }))
+    send(
+        Arc::clone(&c),
+        "CSS.setStyleSheetText",
+        &json!({ "styleSheetId": style_sheet_id, "text": css }),
+    )
 }
 
 pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> JSResult {

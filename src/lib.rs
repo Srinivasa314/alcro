@@ -35,8 +35,8 @@
 
 mod chrome;
 #[cfg(target_family = "windows")]
-use chrome::{close_handle};
-use chrome::{bind, bounds, close, eval, load, set_bounds, load_css, load_js, Chrome};
+use chrome::close_handle;
+use chrome::{bind, bounds, close, eval, load, load_css, load_js, set_bounds, Chrome};
 pub use chrome::{Bounds, JSObject, JSResult, WindowState};
 mod locate;
 use locate::locate_chrome;
@@ -122,7 +122,7 @@ impl UI {
             args.push(&app_arg);
         }
 
-        let chrome_path=std::env::var("ALCRO_BROWSER_PATH").or_else(|_|locate_chrome())?;
+        let chrome_path = std::env::var("ALCRO_BROWSER_PATH").or_else(|_| locate_chrome())?;
         let chrome = Chrome::new_with_args(&chrome_path, &args)?;
         Ok(UI {
             chrome,
@@ -194,7 +194,7 @@ impl UI {
     {
         bind(self.chrome.clone(), name, Arc::new(f))
     }
-    
+
     /// Evaluates js code and returns the result.
     ///
     /// # Examples
