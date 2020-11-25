@@ -1,6 +1,5 @@
 #![windows_subsystem = "windows"]
 use alcro::{Content, UIBuilder};
-use serde_json::to_value;
 
 fn  main() -> Result<(), Box<dyn std::error::Error>> {
     let index_content = include_str!("load-css-js/index.html");
