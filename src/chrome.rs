@@ -261,8 +261,7 @@ pub fn bounds(c: Arc<Chrome>) -> Result<Bounds, JSObject> {
 }
 
 pub fn load_js(c: Arc<Chrome>, script: &str) -> JSResult {
-    let script = String::from(script);
-    if let Err(e) = send(
+   if let Err(e) = send(
         Arc::clone(&c),
         "Page.addScriptToEvaluateOnNewDocument",
         &json!({ "source": script }),
