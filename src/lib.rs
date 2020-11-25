@@ -169,6 +169,7 @@ impl UI {
     }
 
     /// Bind a rust function so that JS code can use it. It returns Err if it fails.
+    /// The rust function will be executed in a new thread and can be called asynchronously from Javascript
     ///
     /// # Arguments
     ///

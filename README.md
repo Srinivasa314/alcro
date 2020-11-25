@@ -21,7 +21,7 @@ Alcro works similarily to the go library [lorca](https://github.com/zserge/lorca
 * Can control and get position, size and state of window
 * Expose rust functions to Javascript
 * Call any JS code from rust
-* Exposed functions are asynchronous
+* Exposed rust functions are executed in a new thread and can be called asynchronously
 * Load HTML from url, local file or even embedded files
 * JS console messages and exceptions are printed for easier debugging
 * Can run in headless mode
