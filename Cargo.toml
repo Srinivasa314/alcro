@@ -10,21 +10,21 @@ repository = "https://github.com/Srinivasa314/alcro"
 
 [dependencies]
 tempdir = "0.3.7"
-serde = { version = "1.0.116", features = ["derive"] }
-serde_json = "1.0.58"
-crossbeam-channel = "0.4.4"
+serde = { version = "1.0.117", features = ["derive"] }
+serde_json = "1.0.59"
+crossbeam-channel = "0.5.0"
 tinyfiledialogs = "3.3.10"
-libc = "0.2.79"
-serde_derive = "1.0.116"
+libc = "0.2.80"
+serde_derive = "1.0.117"
 dashmap = "3.11.10"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = ["namedpipeapi" , "synchapi" , "handleapi" ] }
-os_str_bytes = "2.3.2"
+os_str_bytes = "2.4.0"
 
 [dev-dependencies]
-actix-web = "3.1.0"
+actix-web = "3.3.0"
 actix-rt = "1.1.1"
 rust-embed = "5.6.0"
 mime_guess = "2.0.3"
-futures = "0.3.6"
+futures = "0.3.8"
