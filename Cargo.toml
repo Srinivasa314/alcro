@@ -17,6 +17,7 @@ tinyfiledialogs = "3.3.10"
 libc = "0.2.80"
 serde_derive = "1.0.117"
 dashmap = "3.11.10"
+thiserror = "1.0.23"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = ["namedpipeapi" , "synchapi" , "handleapi" ] }
@@ -28,3 +29,5 @@ actix-rt = "1.1.1"
 rust-embed = "5.6.0"
 mime_guess = "2.0.3"
 futures = "0.3.8"
+anyhow = "1.0.38"
+

@@ -1,7 +1,7 @@
 #![windows_subsystem = "windows"]
 use alcro::{Content, UIBuilder};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> anyhow::Result<()> {
     let index_content = include_str!("load-css-js/index.html");
     let script = include_str!("load-css-js/js/script.js");
     let css = include_str!("load-css-js/css/style.css");
@@ -9,8 +9,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .content(Content::Html(index_content))
         .run()?;
 
-    ui.load_js(script).unwrap();
-    ui.load_css(css).unwrap();
+    ui.load_js(script)?;
+    ui.load_css(css)?;
 
     ui.wait_finish();
     Ok(())

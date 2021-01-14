@@ -42,19 +42,33 @@ fn paths() -> [String; 7] {
     ]
 }
 
-pub fn locate_chrome() -> Result<String, Box<dyn std::error::Error>> {
+#[derive(Debug, thiserror::Error)]
+pub enum LocateChromeError {
+    #[error("An installation of chrome/chromium could not be found")]
+    ChromeNotInstalledError,
+    #[error("Download chrome prompt could not be displayed: {0}")]
+    PromptError(#[from] PromptError),
+}
+
+pub fn locate_chrome() -> Result<String, LocateChromeError> {
     for path in paths().iter() {
         if Path::new(path).exists() {
             return Ok(path.to_string());
         }
     }
     prompt_download()?;
-    Err("Chrome not found!".into())
+    Err(LocateChromeError::ChromeNotInstalledError)
 }
 
 use std::process::Command;
 
-fn prompt_download() -> std::io::Result<()> {
+#[derive(Debug, thiserror::Error)]
+pub enum PromptError {
+    #[error("Cannot display dialog: {0}")]
+    IOError(#[from] std::io::Error),
+}
+
+fn prompt_download() -> Result<(), PromptError> {
     let title = "Chrome not found";
     let text =
         "No Chrome/Chromium installation was found. Would you like to download and install it now?";

@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    fmt::Display,
+    sync::{Arc, Mutex},
+};
 
 use crossbeam_channel::{bounded, Sender};
 use serde::{Deserialize, Serialize};
@@ -22,6 +25,39 @@ pub type JSObject = serde_json::Value;
 /// * There is an exception
 /// * An error type is returned
 pub type JSResult = Result<JSObject, JSObject>;
+
+/// An error from chrome in JSON format
+#[derive(Debug)]
+pub struct JSError(JSObject);
+impl JSError {
+    pub fn source(self) -> JSObject {
+        self.0
+    }
+}
+impl std::error::Error for JSError {}
+impl Display for JSError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+impl From<JSObject> for JSError {
+    fn from(o: JSObject) -> Self {
+        Self(o)
+    }
+}
+
+trait ToResultOfJSError {
+    fn to_result_of_jserror(self) -> Result<(), JSError>;
+}
+impl ToResultOfJSError for JSResult {
+    fn to_result_of_jserror(self) -> Result<(), JSError> {
+        match self {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
 type BindingFunc = Arc<dyn Fn(&[JSObject]) -> JSResult + Sync + Send>;
 
 pub struct Chrome {
@@ -79,7 +115,7 @@ impl WindowState {
 }
 
 impl Chrome {
-    pub fn new_with_args(chrome_binary: &str, args: &[&str]) -> Result<Arc<Chrome>, String> {
+    pub fn new_with_args(chrome_binary: &str, args: &[&str]) -> Result<Arc<Chrome>, JSError> {
         let (pid, precv, psend) = new_process(chrome_binary, &args);
         let (kill_send, kill_recv) = bounded(1);
 
@@ -126,11 +162,11 @@ impl Chrome {
         ]
         .iter()
         {
-            send(Arc::clone(&c_arc), method, args).map_err(|e| e.to_string())?;
+            send(Arc::clone(&c_arc), method, args)?;
         }
 
         if !args.contains(&"--headless") {
-            let win_id = get_window_for_target(Arc::clone(&c_arc)).map_err(|e| e.to_string())?;
+            let win_id = get_window_for_target(Arc::clone(&c_arc))?;
             Arc::clone(&c_arc).window.store(win_id, Ordering::Relaxed);
         }
         Ok(c_arc)
@@ -164,7 +200,7 @@ impl Chrome {
         }
     }
 
-    fn start_session(&self) -> Result<String, String> {
+    fn start_session(&self) -> Result<String, JSError> {
         send_msg(
             &self.psend,
             json!(
@@ -182,7 +218,7 @@ impl Chrome {
                 serde_json::from_str(&recv_msg(&self.precv)).expect("Invalid JSON");
             if pmsg["id"] == 1 {
                 if pmsg["error"] != JSObject::Null {
-                    return Err(pmsg["error"].to_string());
+                    return Err(pmsg["error"].clone().into());
                 }
                 let session = &pmsg["result"];
                 return Ok(session["sessionId"]
@@ -215,8 +251,8 @@ fn get_window_for_target(c: Arc<Chrome>) -> Result<i32, JSObject> {
     }
 }
 
-pub fn load(c: Arc<Chrome>, url: &str) -> JSResult {
-    send(Arc::clone(&c), "Page.navigate", &json!({ "url": url }))
+pub fn load(c: Arc<Chrome>, url: &str) -> Result<(), JSError> {
+    send(Arc::clone(&c), "Page.navigate", &json!({ "url": url })).to_result_of_jserror()
 }
 
 pub fn eval(c: Arc<Chrome>, expr: &str) -> JSResult {
@@ -229,7 +265,7 @@ pub fn eval(c: Arc<Chrome>, expr: &str) -> JSResult {
     )
 }
 
-pub fn set_bounds(c: Arc<Chrome>, b: Bounds) -> JSResult {
+pub fn set_bounds(c: Arc<Chrome>, b: Bounds) -> Result<(), JSError> {
     let param = json!({
         "windowId": c.window,
         "bounds": if b.window_state != WindowState::Normal {
@@ -240,7 +276,7 @@ pub fn set_bounds(c: Arc<Chrome>, b: Bounds) -> JSResult {
             serde_json::to_value(b).unwrap()
         }
     });
-    send(c, "Browser.setWindowBounds", &param)
+    send(c, "Browser.setWindowBounds", &param).to_result_of_jserror()
 }
 
 pub fn bounds(c: Arc<Chrome>) -> Result<Bounds, JSObject> {
@@ -260,25 +296,25 @@ pub fn bounds(c: Arc<Chrome>) -> Result<Bounds, JSObject> {
     }
 }
 
-pub fn load_js(c: Arc<Chrome>, script: &str) -> JSResult {
+pub fn load_js(c: Arc<Chrome>, script: &str) -> Result<(), JSError> {
     if let Err(e) = send(
         Arc::clone(&c),
         "Page.addScriptToEvaluateOnNewDocument",
         &json!({ "source": script }),
     ) {
-        return Err(e);
+        return Err(e.into());
     }
-    eval(Arc::clone(&c), &script)
+    eval(Arc::clone(&c), &script).to_result_of_jserror()
 }
 
-pub fn load_css(c: Arc<Chrome>, css: &str) -> JSResult {
+pub fn load_css(c: Arc<Chrome>, css: &str) -> Result<(), JSError> {
     let frame_tree = match send(
         Arc::clone(&c),
         "Page.getFrameTree",
         &json!({ "targetId": c.target }),
     ) {
         Ok(ft) => ft,
-        Err(e) => return Err(e),
+        Err(e) => return Err(e.into()),
     };
     let frame_id = frame_tree["frameTree"]["frame"]["id"].as_str().unwrap();
     let style_sheet = match send(
@@ -287,7 +323,7 @@ pub fn load_css(c: Arc<Chrome>, css: &str) -> JSResult {
         &json!({ "frameId": frame_id }),
     ) {
         Ok(ss) => ss,
-        Err(e) => return Err(e),
+        Err(e) => return Err(e.into()),
     };
     let style_sheet_id = style_sheet["styleSheetId"].as_str().unwrap();
     send(
@@ -295,9 +331,10 @@ pub fn load_css(c: Arc<Chrome>, css: &str) -> JSResult {
         "CSS.setStyleSheetText",
         &json!({ "styleSheetId": style_sheet_id, "text": css }),
     )
+    .to_result_of_jserror()
 }
 
-pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> JSResult {
+pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> Result<(), JSError> {
     c.bindings.insert(name.to_string(), f);
 
     if let Err(e) = send(
@@ -305,7 +342,7 @@ pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> JSResult {
         "Runtime.addBinding",
         &json!({ "name": name }),
     ) {
-        return Err(e);
+        return Err(e.into());
     }
 
     let script = format!(
@@ -342,9 +379,9 @@ pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> JSResult {
         "Page.addScriptToEvaluateOnNewDocument",
         &json!({ "source": script }),
     ) {
-        return Err(e);
+        return Err(e.into());
     }
-    eval(Arc::clone(&c), &script)
+    eval(Arc::clone(&c), &script).to_result_of_jserror()
 }
 
 pub fn close(c: Arc<Chrome>) {

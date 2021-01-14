@@ -33,7 +33,7 @@ fn assets(req: HttpRequest) -> HttpResponse {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> anyhow::Result<()> {
     let (server_tx, server_rx) = mpsc::channel();
     let (port_tx, port_rx) = mpsc::channel();
 

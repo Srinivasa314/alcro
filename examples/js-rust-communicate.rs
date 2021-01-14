@@ -1,8 +1,8 @@
 #![windows_subsystem = "windows"]
-use alcro::{Content, UIBuilder};
+use alcro::{Content, JSError, UIBuilder};
 use serde_json::to_value;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> anyhow::Result<()> {
     let ui = UIBuilder::new()
         .content(Content::Html(include_str!("js-rust-communicate.html")))
         .run()?;
@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap(),
         "JS Rust Communication"
     );
-    ui.eval("document.getElementById('result').innerText='Type the file name in the input box and click the button the result will be displayed'").map_err(|e|e.to_string())?;
+    ui.eval("document.getElementById('result').innerText='Type the file name in the input box and click the button the result will be displayed'").map_err(|e|JSError::from(e))?;
 
     ui.bind("readFile", |args| {
         if args.len() == 0 {
@@ -27,8 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None => Err(to_value("Argument should be a string").unwrap()),
             }
         }
-    })
-    .map_err(|e| e.to_string())?;
+    })?;
     ui.wait_finish();
     Ok(())
 }

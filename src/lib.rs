@@ -37,10 +37,10 @@ mod chrome;
 #[cfg(target_family = "windows")]
 use chrome::close_handle;
 use chrome::{bind, bounds, close, eval, load, load_css, load_js, set_bounds, Chrome};
-pub use chrome::{Bounds, JSObject, JSResult, WindowState};
+pub use chrome::{Bounds, JSError, JSObject, JSResult, WindowState};
 mod locate;
-use locate::locate_chrome;
 pub use locate::tinyfiledialogs as dialog;
+use locate::{locate_chrome, LocateChromeError};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -81,6 +81,23 @@ pub struct UI {
     waited: AtomicBool,
 }
 
+/// Error in launching a UI window
+#[derive(Debug, thiserror::Error)]
+pub enum UILaunchError {
+    /// Cannot create temporary directory
+    #[error("Cannot create temporary directory: {0}")]
+    TempDirectoryCreationError(#[from] std::io::Error),
+    /// The path specified by ALCRO_BROWSER_PATH does not exist
+    #[error("The path {0} specified by ALCRO_BROWSER_PATH does not exist")]
+    BrowserPathInvalid(String),
+    /// Error in locating chrome
+    #[error("Error in locating chrome: {0}")]
+    LocateChromeError(#[from] LocateChromeError),
+    /// Error when initializing chrome
+    #[error("Error when initializing chrome: {0}")]
+    ChromeInitError(#[from] JSError),
+}
+
 impl UI {
     fn new(
         url: &str,
@@ -88,7 +105,7 @@ impl UI {
         width: i32,
         height: i32,
         custom_args: &[&str],
-    ) -> Result<UI, Box<dyn std::error::Error>> {
+    ) -> Result<UI, UILaunchError> {
         let _tmpdir;
         let dir = match dir {
             Some(dir) => {
@@ -102,10 +119,7 @@ impl UI {
         };
 
         let mut args = Vec::from(DEFAULT_CHROME_ARGS);
-        let user_data_dir_arg = format!(
-            "--user-data-dir={}",
-            dir.to_str().ok_or("Directory not valid UTF-8")?
-        );
+        let user_data_dir_arg = format!("--user-data-dir={}", dir.to_str().unwrap());
         args.push(&user_data_dir_arg);
         let window_size_arg = format!("--window-size={},{}", width, height);
         args.push(&window_size_arg);
@@ -126,7 +140,7 @@ impl UI {
                 if std::fs::metadata(&path).is_ok() {
                     path
                 } else {
-                    Err(format!("{} does not exist", path))?
+                    return Err(UILaunchError::BrowserPathInvalid(path));
                 }
             }
             Err(_) => locate_chrome()?,
@@ -156,7 +170,7 @@ impl UI {
     }
 
     /// Load content in the browser. It returns Err if it fails.
-    pub fn load(&self, content: Content) -> JSResult {
+    pub fn load(&self, content: Content) -> Result<(), JSError> {
         let html: String;
         let url = match content {
             Content::Url(u) => u,
@@ -197,7 +211,7 @@ impl UI {
     /// assert_eq!(ui.eval("(async () => await add(1,2,3))();").unwrap(), 6);
     /// assert!(ui.eval("(async () => await add(1,2,'hi'))();").is_err());
     /// ```
-    pub fn bind<F>(&self, name: &str, f: F) -> JSResult
+    pub fn bind<F>(&self, name: &str, f: F) -> Result<(), JSError>
     where
         F: Fn(&[JSObject]) -> JSResult + Sync + Send + 'static,
     {
@@ -237,7 +251,7 @@ impl UI {
     /// assert_eq!(ui.eval("loadedFunction()").unwrap(), "This function was loaded from rust");
     /// ```
 
-    pub fn load_js(&self, script: &str) -> JSResult {
+    pub fn load_js(&self, script: &str) -> Result<(), JSError> {
         load_js(self.chrome.clone(), script)
     }
 
@@ -256,14 +270,14 @@ impl UI {
     /// ui.load_css("body {display: none;}");
     /// ```
 
-    pub fn load_css(&self, css: &str) -> JSResult {
+    pub fn load_css(&self, css: &str) -> Result<(), JSError> {
         load_css(self.chrome.clone(), css)
     }
 
     /// It changes the size, position or state of the browser window specified by the `Bounds` struct. It returns Err if it fails.
     ///
     /// To change the window state alone use `WindowState::to_bounds()`
-    pub fn set_bounds(&self, b: Bounds) -> JSResult {
+    pub fn set_bounds(&self, b: Bounds) -> Result<(), JSError> {
         set_bounds(self.chrome.clone(), b)
     }
 
@@ -322,7 +336,7 @@ impl<'a> UIBuilder<'a> {
     }
 
     /// Return the UI instance. It returns the Err variant if any error occurs.
-    pub fn run(&self) -> Result<UI, Box<dyn std::error::Error>> {
+    pub fn run(&self) -> Result<UI, UILaunchError> {
         let html: String;
         let url = match self.content {
             Content::Url(u) => u,
