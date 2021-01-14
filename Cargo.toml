@@ -1,6 +1,6 @@
 [package]
 name = "alcro"
-version = "0.4.0"
+version = "0.5.0"
 authors = ["Srinivasa <m.srinivasa1234@gmail.com>"]
 edition = "2018"
 description = "A library to create desktop apps using rust and modern web technologies"
@@ -10,13 +10,13 @@ repository = "https://github.com/Srinivasa314/alcro"
 
 [dependencies]
 tempdir = "0.3.7"
-serde = { version = "1.0.117", features = ["derive"] }
-serde_json = "1.0.59"
+serde = { version = "1.0.119", features = ["derive"] }
+serde_json = "1.0.61"
 crossbeam-channel = "0.5.0"
 tinyfiledialogs = "3.3.10"
-libc = "0.2.80"
-serde_derive = "1.0.117"
-dashmap = "3.11.10"
+libc = "0.2.82"
+serde_derive = "1.0.119"
+dashmap = "4.0.2"
 thiserror = "1.0.23"
 
 [target.'cfg(windows)'.dependencies]
@@ -24,10 +24,10 @@ winapi = { version = "0.3.9", features = ["namedpipeapi" , "synchapi" , "handlea
 os_str_bytes = "2.4.0"
 
 [dev-dependencies]
-actix-web = "3.3.0"
+actix-web = "3.3.2"
 actix-rt = "1.1.1"
-rust-embed = "5.6.0"
+rust-embed = "5.8.0"
 mime_guess = "2.0.3"
-futures = "0.3.8"
+futures = "0.3.10"
 anyhow = "1.0.38"
 
