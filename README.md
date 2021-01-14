@@ -25,7 +25,7 @@ Alcro works similarily to the go library [lorca](https://github.com/zserge/lorca
 * Load HTML from url, local file or even embedded files
 * JS console messages and exceptions are printed for easier debugging
 * Can run in headless mode
-* Supports running many windows
+* Supports running many windows (Currently each window should have a different user data directory)
 
 ## Limitations
 * Requires Chrom(e/ium) to be installed

@@ -1,0 +1,13 @@
+<html>
+
+<head>
+    <title>Multiple Windows</title>
+</head>
+
+<body>
+    <button onclick="increment().then(c=>document.getElementById('count').innerText=`Count: ${c}`)">Increment</button>
+    <p id="count">Count: 0</p>
+    <button onclick="decrement().then(c=>document.getElementById('count').innerText=`Count: ${c}`)">Decrement</button>
+</body>
+
+</html>
