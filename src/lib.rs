@@ -23,7 +23,7 @@
 //!         }
 //!     }
 //!     Ok(to_value(product).unwrap())
-//! });
+//! }).expect("Unable to bind function");
 //!
 //! assert_eq!(ui.eval("(async () => await product(1,2,3))();").unwrap(), 6);
 //! assert!(ui.eval("(async () => await product(1,2,'hi'))();").is_err());
@@ -207,7 +207,7 @@ impl UI {
     ///         }
     ///     }
     ///     Ok(to_value(sum).unwrap())
-    /// });
+    /// }).expect("Unable to bind function");
     /// assert_eq!(ui.eval("(async () => await add(1,2,3))();").unwrap(), 6);
     /// assert!(ui.eval("(async () => await add(1,2,'hi'))();").is_err());
     /// ```
@@ -247,7 +247,7 @@ impl UI {
     /// #![windows_subsystem = "windows"]
     /// use alcro::UIBuilder;
     /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().expect("Unable to launch");
-    /// ui.load_js("function loadedFunction() { return 'This function was loaded from rust'; }");
+    /// ui.load_js("function loadedFunction() { return 'This function was loaded from rust'; }").expect("Unable to load js");
     /// assert_eq!(ui.eval("loadedFunction()").unwrap(), "This function was loaded from rust");
     /// ```
 
@@ -267,7 +267,7 @@ impl UI {
     /// #![windows_subsystem = "windows"]
     /// use alcro::UIBuilder;
     /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().expect("Unable to launch");
-    /// ui.load_css("body {display: none;}");
+    /// ui.load_css("body {display: none;}").expect("Unable to load css");
     /// ```
 
     pub fn load_css(&self, css: &str) -> Result<(), JSError> {
