@@ -9,25 +9,25 @@ readme = "README.md"
 repository = "https://github.com/Srinivasa314/alcro"
 
 [dependencies]
-serde = { version = "1.0.119", features = ["derive"] }
-serde_json = "1.0.61"
+serde = { version = "1.0.124", features = ["derive"] }
+serde_json = "1.0.64"
 crossbeam-channel = "0.5.0"
 tinyfiledialogs = "3.3.10"
-libc = "0.2.82"
-serde_derive = "1.0.119"
+libc = "0.2.90"
+serde_derive = "1.0.124"
 dashmap = "4.0.2"
-thiserror = "1.0.23"
+thiserror = "1.0.24"
 tempfile = "3.2.0"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = ["namedpipeapi" , "synchapi" , "handleapi" ] }
-os_str_bytes = "2.4.0"
+os_str_bytes = "3.0.0"
 
 [dev-dependencies]
 actix-web = "3.3.2"
-actix-rt = "1.1.1"
-rust-embed = "5.8.0"
+actix-rt = "2.1.0"
+rust-embed = "5.9.0"
 mime_guess = "2.0.3"
-futures = "0.3.10"
-anyhow = "1.0.38"
+futures = "0.3.13"
+anyhow = "1.0.39"
 
