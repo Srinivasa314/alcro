@@ -77,7 +77,7 @@ const DEFAULT_CHROME_ARGS: &[&str] = &[
 /// The browser window
 pub struct UI {
     chrome: Arc<Chrome>,
-    _tmpdir: Option<tempdir::TempDir>,
+    _tmpdir: Option<tempfile::TempDir>,
     waited: AtomicBool,
 }
 
@@ -113,7 +113,7 @@ impl UI {
                 dir
             }
             None => {
-                _tmpdir = Some(tempdir::TempDir::new("alcro")?);
+                _tmpdir = Some(tempfile::TempDir::new()?);
                 _tmpdir.as_ref().unwrap().path()
             }
         };

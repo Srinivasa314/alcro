@@ -9,7 +9,6 @@ readme = "README.md"
 repository = "https://github.com/Srinivasa314/alcro"
 
 [dependencies]
-tempdir = "0.3.7"
 serde = { version = "1.0.119", features = ["derive"] }
 serde_json = "1.0.61"
 crossbeam-channel = "0.5.0"
@@ -18,6 +17,7 @@ libc = "0.2.82"
 serde_derive = "1.0.119"
 dashmap = "4.0.2"
 thiserror = "1.0.23"
+tempfile = "3.2.0"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = ["namedpipeapi" , "synchapi" , "handleapi" ] }
