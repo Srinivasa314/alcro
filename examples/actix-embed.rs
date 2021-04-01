@@ -39,7 +39,7 @@ fn main() -> anyhow::Result<()> {
 
     // start actix web server in separate thread
     thread::spawn(move || {
-        let sys = actix_rt::System::new();
+        let sys = actix_rt::System::new("System");
 
         let server = HttpServer::new(|| App::new().route("*", web::get().to(assets)))
             .bind("127.0.0.1:0")

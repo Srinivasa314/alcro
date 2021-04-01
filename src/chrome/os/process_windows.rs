@@ -25,16 +25,16 @@ fn l(string: &str) -> Vec<u16> {
 use std::mem::*;
 use winapi::shared::minwindef::{TRUE, *};
 use winapi::shared::ntdef::HANDLE;
+use winapi::um::errhandlingapi::*;
 use winapi::um::fileapi::*;
 use winapi::um::handleapi::*;
 use winapi::um::minwinbase::*;
 use winapi::um::namedpipeapi::*;
 use winapi::um::processthreadsapi::*;
-
 use winapi::um::winbase::*;
 use winapi::um::winnt::*;
 
-pub fn new_process(path: &str, args: &[&str]) -> (Process, PipeReader, PipeWriter) {
+pub fn new_process(path: &str, args: &[&str]) -> Result<(Process, PipeReader, PipeWriter), String> {
     unsafe {
         let size_sa = size_of::<SECURITY_ATTRIBUTES>() as u32;
         let mut sa = SECURITY_ATTRIBUTES {
@@ -52,6 +52,9 @@ pub fn new_process(path: &str, args: &[&str]) -> (Process, PipeReader, PipeWrite
             0,
             NULL(),
         );
+        if null_read == INVALID_HANDLE_VALUE {
+            return Err(format!("CreateFileW failed with error {}", GetLastError()));
+        }
         let null_write = CreateFileW(
             l("NUL").as_mut_ptr(),
             FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES,
@@ -61,24 +64,32 @@ pub fn new_process(path: &str, args: &[&str]) -> (Process, PipeReader, PipeWrite
             0,
             NULL(),
         );
-
+        if null_write == INVALID_HANDLE_VALUE {
+            return Err(format!("CreateFileW failed with error {}", GetLastError()));
+        }
         let mut readpipe3: HANDLE = NULL();
         let mut writepipe3: HANDLE = NULL();
-        CreatePipe(
+        if CreatePipe(
             &mut readpipe3 as LPHANDLE,
             &mut writepipe3 as LPHANDLE,
             &mut sa as LPSECURITY_ATTRIBUTES,
             0,
-        );
+        ) == 0
+        {
+            return Err(format!("CreatePipe failed with error {}", GetLastError()));
+        }
 
         let mut readpipe4: HANDLE = NULL();
         let mut writepipe4: HANDLE = NULL();
-        CreatePipe(
+        if CreatePipe(
             &mut readpipe4 as LPHANDLE,
             &mut writepipe4 as LPHANDLE,
             &mut sa as LPSECURITY_ATTRIBUTES,
             0,
-        );
+        ) == 0
+        {
+            return Err(format!("CreatePipe failed with error {}", GetLastError()));
+        }
 
         let mut startupinfo: STARTUPINFOW = zeroed();
         let mut processinfo: PROCESS_INFORMATION = zeroed();
@@ -100,7 +111,7 @@ pub fn new_process(path: &str, args: &[&str]) -> (Process, PipeReader, PipeWrite
 
         let args: Vec<OsString> = args.iter().map(OsString::from).collect();
         let mut cmd_str = make_command_line(&OsString::from(path), &args).unwrap();
-        CreateProcessW(
+        if CreateProcessW(
             NULL(),
             cmd_str.as_mut_ptr(),
             NULL(),
@@ -111,17 +122,29 @@ pub fn new_process(path: &str, args: &[&str]) -> (Process, PipeReader, PipeWrite
             NULL(),
             &mut startupinfo as LPSTARTUPINFOW,
             &mut processinfo as LPPROCESS_INFORMATION,
-        );
+        ) == 0
+        {
+            return Err(format!(
+                "CreateProcessW failed with error {}",
+                GetLastError()
+            ));
+        }
 
-        CloseHandle(processinfo.hThread);
-        CloseHandle(readpipe3);
-        CloseHandle(writepipe4);
+        if CloseHandle(processinfo.hThread) == 0 {
+            return Err(format!("CloseHandle failed with error {}", GetLastError()));
+        }
+        if CloseHandle(readpipe3) == 0 {
+            return Err(format!("CloseHandle failed with error {}", GetLastError()));
+        }
+        if CloseHandle(writepipe4) == 0 {
+            return Err(format!("CloseHandle failed with error {}", GetLastError()));
+        }
 
         use std::fs::File;
         use std::os::windows::io::FromRawHandle;
         let writep = PipeWriter::new(File::from_raw_handle(writepipe3));
         let readp = PipeReader::new(File::from_raw_handle(readpipe4));
-        (processinfo.hProcess, readp, writep)
+        Ok((processinfo.hProcess, readp, writep))
     }
 }
 

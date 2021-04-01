@@ -62,6 +62,9 @@ type BindingFunc = Arc<dyn Fn(&[JSObject]) -> JSResult + Sync + Send>;
 
 pub struct Chrome {
     id: AtomicI32,
+    #[cfg(target_family = "unix")]
+    pid: Process,
+    #[cfg(target_family = "windows")]
     pid: usize,
     psend: Mutex<PipeWriter>,
     precv: Mutex<PipeReader>,
@@ -116,7 +119,8 @@ impl WindowState {
 
 impl Chrome {
     pub fn new_with_args(chrome_binary: &str, args: &[&str]) -> Result<Arc<Chrome>, JSError> {
-        let (pid, precv, psend) = new_process(chrome_binary, &args);
+        let (pid, precv, psend) =
+            new_process(chrome_binary, &args).expect("Unable to launch chrome");
         let (kill_send, kill_recv) = bounded(1);
 
         let mut c = Chrome {
@@ -129,7 +133,10 @@ impl Chrome {
             pending: dashmap::DashMap::new(),
             bindings: dashmap::DashMap::new(),
             kill_send,
+            #[cfg(target_family = "windows")]
             pid: pid as usize,
+            #[cfg(target_family = "unix")]
+            pid: pid,
         };
 
         c.target = c.find_target();

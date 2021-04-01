@@ -1,52 +1,74 @@
 use super::{PipeReader, PipeWriter};
-use libc::*;
-use std::ptr::null_mut as NULL;
+use libc::{
+    c_char, pid_t, posix_spawn, posix_spawn_file_actions_adddup2, posix_spawn_file_actions_init,
+    posix_spawn_file_actions_t,
+};
+use nix::{
+    errno::Errno,
+    fcntl::{open, OFlag},
+    sys::{
+        signal::{kill, Signal},
+        stat::Mode,
+        wait::{waitpid, WaitPidFlag, WaitStatus},
+    },
+    unistd::{close, pipe, Pid},
+};
+use std::{
+    fs::File,
+    mem,
+    os::unix::prelude::FromRawFd,
+    ptr::{null, null_mut as NULL},
+    result::Result,
+};
+pub type Process = Pid;
 
-pub type Process = libc::pid_t;
+extern "C" {
+    static environ: *const *mut c_char;
+}
 
-pub fn new_process(path: &str, args: &[&str]) -> (Process, PipeReader, PipeWriter) {
-    const READ_END: usize = 0;
-    const WRITE_END: usize = 1;
+pub fn new_process(
+    path: &str,
+    args: &[&str],
+) -> Result<(Process, PipeReader, PipeWriter), nix::Error> {
+    let (pipe3_read, pipe3_write) = pipe()?;
+    let (pipe4_read, pipe4_write) = pipe()?;
 
-    let mut pipe3: [c_int; 2] = [0; 2];
-    let mut pipe4: [c_int; 2] = [0; 2];
+    let null_read = open("/dev/null", OFlag::O_RDONLY, Mode::empty())?;
+    let null_write = open("/dev/null", OFlag::O_WRONLY, Mode::empty())?;
 
+    let mut pid: pid_t = 0;
+    let readp: PipeReader;
+    let writep: PipeWriter;
     unsafe {
-        pipe(pipe3.as_mut_ptr());
-        pipe(pipe4.as_mut_ptr());
-    }
-
-    let childpid: Process;
-    unsafe {
-        childpid = fork();
-    }
-
-    if childpid == -1 {
-        panic!("Fork failed");
-    } else if childpid != 0 {
-        let readp: PipeReader;
-        let writep: PipeWriter;
-        unsafe {
-            use std::fs::File;
-            use std::os::unix::io::FromRawFd;
-            close(pipe3[READ_END]);
-            close(pipe4[WRITE_END]);
-            writep = PipeWriter::new(File::from_raw_fd(pipe3[WRITE_END]));
-            readp = PipeReader::new(File::from_raw_fd(pipe4[READ_END]));
-        }
-        (childpid, readp, writep)
-    } else {
-        unsafe {
-            let dev_null_path = std::ffi::CString::new("/dev/null").unwrap();
-            let null_read = open(dev_null_path.as_ptr(), O_RDONLY);
-            let null_write = open(dev_null_path.as_ptr(), O_WRONLY);
-
-            dup2(null_read, 0);
-            dup2(null_write, 1);
-            dup2(null_write, 2);
-            dup2(pipe3[READ_END], 3);
-            dup2(pipe4[WRITE_END], 4);
-        }
+        let mut file_actions: posix_spawn_file_actions_t = mem::zeroed();
+        Errno::result(posix_spawn_file_actions_init(
+            &mut file_actions as *mut posix_spawn_file_actions_t,
+        ))?;
+        Errno::result(posix_spawn_file_actions_adddup2(
+            &mut file_actions,
+            null_read,
+            0,
+        ))?;
+        Errno::result(posix_spawn_file_actions_adddup2(
+            &mut file_actions,
+            null_write,
+            1,
+        ))?;
+        Errno::result(posix_spawn_file_actions_adddup2(
+            &mut file_actions,
+            null_write,
+            2,
+        ))?;
+        Errno::result(posix_spawn_file_actions_adddup2(
+            &mut file_actions,
+            pipe3_read,
+            3,
+        ))?;
+        Errno::result(posix_spawn_file_actions_adddup2(
+            &mut file_actions,
+            pipe4_write,
+            4,
+        ))?;
 
         let path = std::ffi::CString::new(path).unwrap();
         let args = args
@@ -54,45 +76,40 @@ pub fn new_process(path: &str, args: &[&str]) -> (Process, PipeReader, PipeWrite
             .map(|s| std::ffi::CString::new(*s).unwrap())
             .collect::<Vec<_>>();
 
-        let mut args_ptr_list = vec![path.as_ptr() as *const c_char];
-        args_ptr_list.append(&mut args.iter().map(|s| s.as_ptr() as *const c_char).collect());
+        let mut args_ptr_list = vec![path.as_ptr() as *mut c_char];
+        args_ptr_list.append(&mut args.iter().map(|s| s.as_ptr() as *mut c_char).collect());
         args_ptr_list.push(NULL());
 
-        unsafe {
-            execv(path.as_ptr() as *const c_char, args_ptr_list.as_ptr());
-        }
-        panic!("Unable to exec");
+        Errno::result(posix_spawn(
+            &mut pid,
+            path.as_ptr(),
+            &file_actions,
+            null(),
+            args_ptr_list.as_ptr(),
+            environ,
+        ))?;
+
+        writep = PipeWriter::new(File::from_raw_fd(pipe3_write));
+        readp = PipeReader::new(File::from_raw_fd(pipe4_read));
+    }
+    close(pipe3_read)?;
+    close(pipe4_write)?;
+
+    Ok((Pid::from_raw(pid), readp, writep))
+}
+
+pub fn kill_proc(p: Process) -> Result<(), nix::Error> {
+    kill(p, Signal::SIGTERM)
+}
+
+pub fn exited(pid: Process) -> std::result::Result<bool, nix::Error> {
+    match waitpid(pid, Some(WaitPidFlag::WNOHANG))? {
+        WaitStatus::Exited(_, _) => Ok(true),
+        _ => Ok(false),
     }
 }
 
-pub fn kill_proc(p: Process) -> std::io::Result<()> {
-    unsafe {
-        if kill(p, SIGTERM) == -1 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
-    }
-}
-
-pub fn exited(pid: Process) -> std::io::Result<bool> {
-    let mut status = 0;
-    unsafe {
-        match waitpid(pid, &mut status, WNOHANG) {
-            0 => Ok(false),
-            -1 => Err(std::io::Error::last_os_error()),
-            _ => Ok(true),
-        }
-    }
-}
-
-pub fn wait_proc(pid: Process) -> std::io::Result<()> {
-    let mut status = 0;
-    unsafe {
-        if waitpid(pid, &mut status, 0) == -1 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
-    }
+pub fn wait_proc(pid: Process) -> Result<(), nix::Error> {
+    waitpid(pid, None)?;
+    Ok(())
 }
