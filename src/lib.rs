@@ -36,7 +36,7 @@
 mod chrome;
 #[cfg(target_family = "windows")]
 use chrome::close_handle;
-use chrome::{bind, bounds, close, eval, load, load_css, load_js, set_bounds, Chrome};
+use chrome::{bind, bounds, close, eval, load, load_css, load_js, set_bounds, BindingContext, Chrome};
 pub use chrome::{Bounds, JSError, JSObject, JSResult, WindowState};
 mod locate;
 pub use locate::tinyfiledialogs as dialog;
@@ -215,7 +215,49 @@ impl UI {
     where
         F: Fn(&[JSObject]) -> JSResult + Sync + Send + 'static,
     {
+        let f = Arc::new(f);
+        bind(self.chrome.clone(), name, Arc::new(move |context| {
+            let f = f.clone();
+            std::thread::spawn(move || {
+                let result = f(context.args());
+                context.complete(result);
+            });
+        }))
+    }
+
+    /// Bind a rust function callable from JS that can complete asynchronously.
+    /// The rust function will be executed in the message processing loop, and therefore should
+    /// avoid blocking by moving work onto another thread.
+    pub fn bind_async<F>(&self, name: &str, f: F) -> Result<(), JSError>
+    where
+        F: Fn(BindingContext) + Sync + Send + 'static,
+    {
         bind(self.chrome.clone(), name, Arc::new(f))
+    }
+
+    #[cfg(feature = "tokio")]
+    pub fn bind_tokio<F, R>(&self, name: &str, f: F) -> Result<(), JSError>
+    where
+        F: Fn(Vec<JSObject>) -> R + Send + Sync + 'static,
+        R: std::future::Future<Output = JSResult> + Send + 'static,
+    {
+        // Capture the callers runtime, as using tokio::spawn() inside the binding function
+        // will fail as the message processing loop does not have a runtime registered.
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|err| {
+                JSError::from(JSObject::String(err.to_string()))
+            })?;
+
+        self.bind_async(name, move |context| {
+            // Create future outside the spawn, avoiding the async block capturing `f`, which
+            // would require cloning it. This is fine as futures must not have side effects until
+            // polled. For async fn, this means no user code gets run until the await.
+            let fut = f(context.args().to_vec());
+            runtime.spawn(async move {
+                let result = fut.await;
+                context.complete(result);
+            });
+        })
     }
 
     /// Evaluates js code and returns the result.
