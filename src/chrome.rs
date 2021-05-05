@@ -65,15 +65,15 @@ pub struct BindingContext {
 
 impl BindingContext {
     fn new(active: ActiveBindingContext) -> Self {
-        Self { active: Some(active) }
+        Self {
+            active: Some(active),
+        }
     }
 
     pub fn args(&self) -> &[JSObject] {
         match &self.active {
             None => &[],
-            Some(active) => {
-                active.payload["args"].as_array().expect("Expected array")
-            }
+            Some(active) => active.payload["args"].as_array().expect("Expected array"),
         }
     }
 
@@ -439,10 +439,7 @@ pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> Result<(), JSError> {
     eval(Arc::clone(&c), &script).to_result_of_jserror()
 }
 
-fn complete_binding(
-    context: ActiveBindingContext,
-    result: JSResult,
-) {
+fn complete_binding(context: ActiveBindingContext, result: JSResult) {
     let (r, e) = match result {
         Ok(x) => (x.to_string(), r#""""#.to_string()),
         Err(e) => ("".to_string(), e.to_string()),

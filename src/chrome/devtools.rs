@@ -1,4 +1,4 @@
-use super::{BindingContext, Chrome, ActiveBindingContext, JSObject, JSResult};
+use super::{ActiveBindingContext, BindingContext, Chrome, JSObject, JSResult};
 use super::{PipeReader, PipeWriter};
 use crossbeam_channel::{bounded, Sender};
 use serde_json::json;

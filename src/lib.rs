@@ -36,7 +36,9 @@
 mod chrome;
 #[cfg(target_family = "windows")]
 use chrome::close_handle;
-use chrome::{bind, bounds, close, eval, load, load_css, load_js, set_bounds, BindingContext, Chrome};
+use chrome::{
+    bind, bounds, close, eval, load, load_css, load_js, set_bounds, BindingContext, Chrome,
+};
 pub use chrome::{Bounds, JSError, JSObject, JSResult, WindowState};
 mod locate;
 pub use locate::tinyfiledialogs as dialog;
@@ -216,13 +218,17 @@ impl UI {
         F: Fn(&[JSObject]) -> JSResult + Sync + Send + 'static,
     {
         let f = Arc::new(f);
-        bind(self.chrome.clone(), name, Arc::new(move |context| {
-            let f = f.clone();
-            std::thread::spawn(move || {
-                let result = f(context.args());
-                context.complete(result);
-            });
-        }))
+        bind(
+            self.chrome.clone(),
+            name,
+            Arc::new(move |context| {
+                let f = f.clone();
+                std::thread::spawn(move || {
+                    let result = f(context.args());
+                    context.complete(result);
+                });
+            }),
+        )
     }
 
     /// Bind a rust function callable from JS that can complete asynchronously.
@@ -244,9 +250,7 @@ impl UI {
         // Capture the callers runtime, as using tokio::spawn() inside the binding function
         // will fail as the message processing loop does not have a runtime registered.
         let runtime = tokio::runtime::Handle::try_current()
-            .map_err(|err| {
-                JSError::from(JSObject::String(err.to_string()))
-            })?;
+            .map_err(|err| JSError::from(JSObject::String(err.to_string())))?;
 
         self.bind_async(name, move |context| {
             // Create future outside the spawn, avoiding the async block capturing `f`, which
