@@ -10,6 +10,9 @@ repository = "https://github.com/Srinivasa314/alcro"
 
 [[test]]
 name = "integration_test"
+
+[[test]]
+name = "tokio_test"
 required-features = ["tokio"]
 
 [dependencies]
@@ -38,4 +41,4 @@ mime_guess = "2.0.3"
 futures = "0.3.13"
 anyhow = "1.0.40"
 
-tokio = { version = "1", features = ["rt", "macros", "test-util"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
