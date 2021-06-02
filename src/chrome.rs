@@ -70,6 +70,7 @@ impl BindingContext {
         }
     }
 
+    /// The arguments from JS.
     pub fn args(&self) -> &[JSObject] {
         match &self.active {
             None => &[],
@@ -77,14 +78,18 @@ impl BindingContext {
         }
     }
 
+    /// Completes the JS function successfully. Equivalent to `complete(Ok(result))`
     pub fn done(self, result: JSObject) {
         self.complete(Ok(result))
     }
 
+    /// Completes the JS function with an error. Equivalent to `complete(Err(error))`
     pub fn err(self, error: JSObject) {
         self.complete(Err(error))
     }
 
+    /// Completes the JS function, either successfully or not. Takes the [`BindingContext`] by
+    /// value as it releases the outstanding call on the Chrome(ium) side.
     pub fn complete(mut self, result: JSResult) {
         if let Some(incomplete) = self.active.take() {
             complete_binding(incomplete, result)

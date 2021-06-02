@@ -36,10 +36,8 @@
 mod chrome;
 #[cfg(target_family = "windows")]
 use chrome::close_handle;
-use chrome::{
-    bind, bounds, close, eval, load, load_css, load_js, set_bounds, BindingContext, Chrome,
-};
-pub use chrome::{Bounds, JSError, JSObject, JSResult, WindowState};
+use chrome::{bind, bounds, close, eval, load, load_css, load_js, set_bounds, Chrome};
+pub use chrome::{BindingContext, Bounds, JSError, JSObject, JSResult, WindowState};
 mod locate;
 pub use locate::tinyfiledialogs as dialog;
 use locate::{locate_chrome, LocateChromeError};
@@ -231,9 +229,50 @@ impl UI {
         )
     }
 
-    /// Bind a rust function callable from JS that can complete asynchronously.
-    /// The rust function will be executed in the message processing loop, and therefore should
-    /// avoid blocking by moving work onto another thread.
+    /// Bind a rust function callable from JS that can complete asynchronously. If you are using
+    /// [`tokio`], you will probably want to be using [`Self::bind_tokio()`] instead.
+    ///
+    /// Unlike `bind()`, this passes ownership of the arguments to the callback function `f`, and
+    /// allows completing the javascript implementation after returning from `f`. This makes async
+    /// behavior much simpler to implement.
+    ///
+    /// For efficency, `f` will be executed in the message processing loop, and therefore should
+    /// avoid blocking by moving work onto another thread, for example with an async runtime
+    /// spawn method.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Name of the function
+    /// * `f` - The function. It should take a [`BindingContext`] that gives access to the
+    ///         arguments and allows returning results.
+    ///
+    /// # Examples
+    ///
+    /// `bind()` approximately performs the following:
+    ///
+    /// ```
+    /// #![windows_subsystem = "windows"]
+    /// use alcro::UIBuilder;
+    /// use serde_json::to_value;
+    ///
+    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().expect("Unable to launch");
+    /// ui.bind_async("add", |context| {
+    ///     std::thread::spawn(|| {
+    ///         // imagine this is very expensive, or hits a network...
+    ///         let mut sum = 0;
+    ///         for arg in context.args() {
+    ///             match arg.as_i64() {
+    ///                 Some(i) => sum+=i,
+    ///                 None => return context.err(to_value("Not number").unwrap())
+    ///             }
+    ///         }
+    ///
+    ///         context.complete(Ok(to_value(sum).unwrap()));
+    ///     });
+    /// }).expect("Unable to bind function");
+    /// assert_eq!(ui.eval("(async () => await add(1,2,3))();").unwrap(), 6);
+    /// assert!(ui.eval("(async () => await add(1,2,'hi'))();").is_err());
+    /// ```
     pub fn bind_async<F>(&self, name: &str, f: F) -> Result<(), JSError>
     where
         F: Fn(BindingContext) + Sync + Send + 'static,
@@ -241,6 +280,51 @@ impl UI {
         bind(self.chrome.clone(), name, Arc::new(f))
     }
 
+    /// Bind a rust function callable from JS that can complete asynchronously, using the [`tokio`]
+    /// runtime to wrap `bind_async()`, making usage more ergonomic for `tokio` users.
+    ///
+    /// The callback is closer to `bind()` than `bind_async()` in that you take the JS arguments
+    /// and return the JS result, the main difference is that the arguments are passed by value
+    /// and the result is a [`Future`].
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Name of the function
+    /// * `f` - The function. It should take a [`Vec`] of [`JSObject`] arguments by value, and
+    ///         return a [`Future`] for the [`JSResult`] (generally, by using an `async move`
+    ///         block body)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![windows_subsystem = "windows"]
+    /// use alcro::UIBuilder;
+    /// use serde_json::to_value;
+    ///
+    /// # fn main() {
+    /// #   // Ensure a tokio runtime is active for the test. A user will probably be using
+    /// #   // #[tokio::main] instead, which doesn't work in doctests.
+    /// #   let rt = tokio::runtime::Runtime::new().unwrap();
+    /// #   let _guard = rt.enter();
+    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().expect("Unable to launch");
+    /// ui.bind_tokio("add", |args| async move {
+    ///     // imagine this is very expensive, or hits a network...
+    ///     let mut sum = 0;
+    ///     for arg in &args {
+    ///         match arg.as_i64() {
+    ///             Some(i) => sum+=i,
+    ///             None => return Err(to_value("Not number").unwrap())
+    ///         }
+    ///     }
+    ///
+    ///     Ok(to_value(sum).unwrap())
+    /// }).expect("Unable to bind function");
+    /// assert_eq!(ui.eval("(async () => await add(1,2,3))();").unwrap(), 6);
+    /// assert!(ui.eval("(async () => await add(1,2,'hi'))();").is_err());
+    /// # }
+    /// ```
+    ///
+    /// [`Future`]: std::future::Future
     #[cfg(feature = "tokio")]
     pub fn bind_tokio<F, R>(&self, name: &str, f: F) -> Result<(), JSError>
     where
