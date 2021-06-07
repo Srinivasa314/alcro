@@ -8,6 +8,13 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/Srinivasa314/alcro"
 
+[[test]]
+name = "integration_test"
+
+[[test]]
+name = "tokio_test"
+required-features = ["tokio"]
+
 [dependencies]
 serde = { version = "1.0.125", features = ["derive"] }
 serde_json = "1.0.64"
@@ -19,6 +26,8 @@ dashmap = "4.0.2"
 thiserror = "1.0.24"
 tempfile = "3.2.0"
 nix = "0.20.0"
+
+tokio = { version = "1", features = ["rt"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = ["namedpipeapi" , "synchapi" , "handleapi" ] }
@@ -32,3 +41,4 @@ mime_guess = "2.0.3"
 futures = "0.3.13"
 anyhow = "1.0.40"
 
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }

@@ -32,3 +32,34 @@ fn test_eval() {
     assert_eq!(ui.eval("throw 'ERROR'").unwrap_err(), "ERROR");
     assert!(ui.eval("dtyfhgxnt*").is_err());
 }
+
+#[test]
+fn test_bind_async() {
+    let ui = UIBuilder::new()
+        .content(Content::Html(
+            r#"
+        <script>
+        async function foo(x) {
+          const result = await bar(x + 'b');
+          return result + 'd';
+        }
+        </script>
+        "#,
+        ))
+        .custom_args(&["--headless"])
+        .run()
+        .expect("Unable to launch");
+
+    ui.bind_async("bar", move |context| {
+        std::thread::Builder::new()
+            .name("test_bind_async binding".into())
+            .spawn(move || {
+                let result = format!("{}c", context.args()[0].as_str().expect("arg to be str"));
+                context.complete(Ok(result.into()))
+            })
+            .expect("failed to spawn thread");
+    })
+    .unwrap();
+
+    assert_eq!(ui.eval("foo('a')").unwrap(), "abcd");
+}

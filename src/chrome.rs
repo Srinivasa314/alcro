@@ -58,7 +58,60 @@ impl ToResultOfJSError for JSResult {
     }
 }
 
-type BindingFunc = Arc<dyn Fn(&[JSObject]) -> JSResult + Sync + Send>;
+/// Context for an async binding function.
+pub struct BindingContext {
+    active: Option<ActiveBindingContext>,
+}
+
+impl BindingContext {
+    fn new(active: ActiveBindingContext) -> Self {
+        Self {
+            active: Some(active),
+        }
+    }
+
+    /// The arguments from JS.
+    pub fn args(&self) -> &[JSObject] {
+        match &self.active {
+            None => &[],
+            Some(active) => active.payload["args"].as_array().expect("Expected array"),
+        }
+    }
+
+    /// Completes the JS function successfully. Equivalent to `complete(Ok(result))`
+    pub fn done(self, result: JSObject) {
+        self.complete(Ok(result))
+    }
+
+    /// Completes the JS function with an error. Equivalent to `complete(Err(error))`
+    pub fn err(self, error: JSObject) {
+        self.complete(Err(error))
+    }
+
+    /// Completes the JS function, either successfully or not. Takes the [`BindingContext`] by
+    /// value as it releases the outstanding call on the Chrome(ium) side.
+    pub fn complete(mut self, result: JSResult) {
+        if let Some(incomplete) = self.active.take() {
+            complete_binding(incomplete, result)
+        }
+    }
+}
+
+impl Drop for BindingContext {
+    fn drop(&mut self) {
+        if let Some(incomplete) = self.active.take() {
+            complete_binding(incomplete, Ok(JSObject::Null))
+        }
+    }
+}
+
+struct ActiveBindingContext {
+    chrome: Arc<Chrome>,
+    payload: JSObject,
+    context_id: i64,
+}
+
+type BindingFunc = Arc<dyn Fn(BindingContext) + Sync + Send>;
 
 pub struct Chrome {
     id: AtomicI32,
@@ -389,6 +442,40 @@ pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> Result<(), JSError> {
         return Err(e.into());
     }
     eval(Arc::clone(&c), &script).to_result_of_jserror()
+}
+
+fn complete_binding(context: ActiveBindingContext, result: JSResult) {
+    let (r, e) = match result {
+        Ok(x) => (x.to_string(), r#""""#.to_string()),
+        Err(e) => ("".to_string(), e.to_string()),
+    };
+
+    let expr = format!(
+        r"
+        if ({error}) {{
+            window['{name}']['errors'].get({seq})({error});
+        }} else {{
+            window['{name}']['callbacks'].get({seq})({result});
+        }}
+        window['{name}']['callbacks'].delete({seq});
+        window['{name}']['errors'].delete({seq});
+        ",
+        name = context.payload["name"].as_str().expect("Expected string"),
+        seq = context.payload["seq"].as_i64().expect("Expected i64"),
+        result = r,
+        error = e
+    );
+
+    if let Err(e) = send(
+        context.chrome,
+        "Runtime.evaluate",
+        &json!({
+            "expression":expr,
+            "contextId":context.context_id
+        }),
+    ) {
+        eprintln!("{}", e);
+    }
 }
 
 pub fn close(c: Arc<Chrome>) {

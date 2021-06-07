@@ -1,4 +1,4 @@
-use super::{Chrome, JSObject, JSResult};
+use super::{ActiveBindingContext, BindingContext, Chrome, JSObject, JSResult};
 use super::{PipeReader, PipeWriter};
 use crossbeam_channel::{bounded, Sender};
 use serde_json::json;
@@ -133,45 +133,10 @@ fn binding_called(c: Arc<Chrome>, name: &str, payload: JSObject, context_id: i64
         None => None,
     };
     if let Some(binding) = binding {
-        let c = Arc::clone(&c);
-        std::thread::spawn(move || {
-            let result: Result<String, String> =
-                match binding(payload["args"].as_array().expect("Expected array")) {
-                    Err(e) => Err(e.to_string()),
-                    Ok(v) => Ok(v.to_string()),
-                };
-
-            let (r, e) = match result {
-                Ok(x) => (x, r#""""#.to_string()),
-                Err(e) => ("".to_string(), e),
-            };
-
-            let expr = format!(
-                r"
-                if ({error}) {{
-                    window['{name}']['errors'].get({seq})({error});
-                }} else {{
-                    window['{name}']['callbacks'].get({seq})({result});
-                }}
-                window['{name}']['callbacks'].delete({seq});
-                window['{name}']['errors'].delete({seq});
-                ",
-                name = payload["name"].as_str().expect("Expected string"),
-                seq = payload["seq"].as_i64().expect("Expected i64"),
-                result = r,
-                error = e
-            );
-
-            if let Err(e) = send(
-                Arc::clone(&c),
-                "Runtime.evaluate",
-                &json!({
-                    "expression":expr,
-                    "contextId":context_id
-                }),
-            ) {
-                eprintln!("{}", e);
-            }
-        });
+        binding(BindingContext::new(ActiveBindingContext {
+            chrome: c,
+            payload,
+            context_id,
+        }))
     }
 }
