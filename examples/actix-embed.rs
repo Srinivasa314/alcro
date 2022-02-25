@@ -21,7 +21,7 @@ fn assets(req: HttpRequest) -> HttpResponse {
     // query the file from embedded asset with specified path
     match Asset::get(path) {
         Some(content) => {
-            let body: Body = match content {
+            let body: Body = match content.data {
                 Cow::Borrowed(bytes) => bytes.into(),
                 Cow::Owned(bytes) => bytes.into(),
             };
@@ -39,7 +39,7 @@ fn main() -> anyhow::Result<()> {
 
     // start actix web server in separate thread
     thread::spawn(move || {
-        let sys = actix_rt::System::new("System");
+        let sys = actix_rt::System::new();
 
         let server = HttpServer::new(|| App::new().route("*", web::get().to(assets)))
             .bind("127.0.0.1:0")
