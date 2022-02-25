@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "alcro"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "actix-rt 2.6.0",
  "actix-web",
