@@ -27,7 +27,7 @@ thiserror = "1.0.30"
 tempfile = "3.3.0"
 nix = "0.23.1"
 
-tokio = { version = "1.17.0", features = ["rt"], optional = true }
+tokio = { version = "1.18.5", features = ["rt"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = ["namedpipeapi" , "synchapi" , "handleapi" ] }
@@ -41,4 +41,4 @@ mime_guess = "2.0.4"
 futures = "0.3.21"
 anyhow = "1.0.55"
 
-tokio = { version = "1.17.0", features = ["rt", "rt-multi-thread", "macros"] }
+tokio = { version = "1.18.5", features = ["rt", "rt-multi-thread", "macros"] }
