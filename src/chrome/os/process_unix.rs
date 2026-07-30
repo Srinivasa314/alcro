@@ -1,4 +1,3 @@
-use super::{PipeReader, PipeWriter};
 use libc::{
     c_char, pid_t, posix_spawn, posix_spawn_file_actions_adddup2, posix_spawn_file_actions_init,
     posix_spawn_file_actions_t,
@@ -26,10 +25,7 @@ extern "C" {
     static environ: *const *mut c_char;
 }
 
-pub fn new_process(
-    path: &str,
-    args: &[&str],
-) -> Result<(Process, PipeReader, PipeWriter), nix::Error> {
+pub fn new_process(path: &str, args: &[&str]) -> Result<(Process, File, File), nix::Error> {
     let (pipe3_read, pipe3_write) = pipe()?;
     let (pipe4_read, pipe4_write) = pipe()?;
 
@@ -37,8 +33,8 @@ pub fn new_process(
     let null_write = open("/dev/null", OFlag::O_WRONLY, Mode::empty())?;
 
     let mut pid: pid_t = 0;
-    let readp: PipeReader;
-    let writep: PipeWriter;
+    let read_file: File;
+    let write_file: File;
     unsafe {
         let mut file_actions: posix_spawn_file_actions_t = mem::zeroed();
         Errno::result(posix_spawn_file_actions_init(
@@ -89,13 +85,13 @@ pub fn new_process(
             environ,
         ))?;
 
-        writep = PipeWriter::new(File::from_raw_fd(pipe3_write));
-        readp = PipeReader::new(File::from_raw_fd(pipe4_read));
+        write_file = File::from_raw_fd(pipe3_write);
+        read_file = File::from_raw_fd(pipe4_read);
     }
     close(pipe3_read)?;
     close(pipe4_write)?;
 
-    Ok((Pid::from_raw(pid), readp, writep))
+    Ok((Pid::from_raw(pid), read_file, write_file))
 }
 
 pub fn kill_proc(p: Process) -> Result<(), nix::Error> {

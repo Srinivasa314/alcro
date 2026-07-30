@@ -1,40 +1,49 @@
 use alcro::{Content, UIBuilder};
 
-#[test]
-fn test_content() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_content() {
     let ui = UIBuilder::new()
         .content(Content::Html("<html><body>Close Me!</body></html>"))
         .custom_args(&["--headless"])
         .run()
+        .await
         .expect("Unable to launch");
-    assert_eq!(ui.eval("document.body.innerText").unwrap(), "Close Me!");
+    assert_eq!(
+        ui.eval("document.body.innerText").await.unwrap(),
+        "Close Me!"
+    );
 
     let ui2 = UIBuilder::new()
         .content(Content::Url("https://www.google.com"))
         .custom_args(&["--headless"])
         .run()
+        .await
         .expect("Unable to launch");
     assert_eq!(
-        ui2.eval("window.location.href").unwrap(),
+        ui2.eval("window.location.href").await.unwrap(),
         "https://www.google.com/"
     );
 }
 
-#[test]
-fn test_eval() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_eval() {
     let ui = UIBuilder::new()
         .custom_args(&["--headless"])
         .run()
+        .await
         .expect("Unable to launch");
-    assert_eq!(ui.eval("2+2").unwrap(), 4);
-    assert_eq!(ui.eval("Promise.resolve('Its Ok')").unwrap(), "Its Ok");
-    assert_eq!(ui.eval("Promise.reject('ERROR')").unwrap_err(), "ERROR");
-    assert_eq!(ui.eval("throw 'ERROR'").unwrap_err(), "ERROR");
-    assert!(ui.eval("dtyfhgxnt*").is_err());
+    assert_eq!(ui.eval("2+2").await.unwrap(), 4);
+    assert_eq!(
+        ui.eval("Promise.resolve('Its Ok')").await.unwrap(),
+        "Its Ok"
+    );
+    assert_eq!(ui.eval("Promise.reject('ERROR')").await.unwrap_err(), "ERROR");
+    assert_eq!(ui.eval("throw 'ERROR'").await.unwrap_err(), "ERROR");
+    assert!(ui.eval("dtyfhgxnt*").await.is_err());
 }
 
-#[test]
-fn test_bind_async() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_bind() {
     let ui = UIBuilder::new()
         .content(Content::Html(
             r#"
@@ -48,18 +57,15 @@ fn test_bind_async() {
         ))
         .custom_args(&["--headless"])
         .run()
+        .await
         .expect("Unable to launch");
 
-    ui.bind_async("bar", move |context| {
-        std::thread::Builder::new()
-            .name("test_bind_async binding".into())
-            .spawn(move || {
-                let result = format!("{}c", context.args()[0].as_str().expect("arg to be str"));
-                context.complete(Ok(result.into()))
-            })
-            .expect("failed to spawn thread");
+    ui.bind("bar", |args| async move {
+        tokio::task::yield_now().await;
+        Ok(format!("{}c", args[0].as_str().expect("arg to be str")).into())
     })
+    .await
     .unwrap();
 
-    assert_eq!(ui.eval("foo('a')").unwrap(), "abcd");
+    assert_eq!(ui.eval("foo('a')").await.unwrap(), "abcd");
 }

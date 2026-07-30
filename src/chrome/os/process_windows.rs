@@ -1,4 +1,3 @@
-use super::{PipeReader, PipeWriter};
 use std::ptr::null_mut as NULL;
 
 #[repr(packed)]
@@ -34,7 +33,10 @@ use winapi::um::processthreadsapi::*;
 use winapi::um::winbase::*;
 use winapi::um::winnt::*;
 
-pub fn new_process(path: &str, args: &[&str]) -> Result<(Process, PipeReader, PipeWriter), String> {
+pub fn new_process(
+    path: &str,
+    args: &[&str],
+) -> Result<(Process, std::fs::File, std::fs::File), String> {
     unsafe {
         let size_sa = size_of::<SECURITY_ATTRIBUTES>() as u32;
         let mut sa = SECURITY_ATTRIBUTES {
@@ -142,9 +144,9 @@ pub fn new_process(path: &str, args: &[&str]) -> Result<(Process, PipeReader, Pi
 
         use std::fs::File;
         use std::os::windows::io::FromRawHandle;
-        let writep = PipeWriter::new(File::from_raw_handle(writepipe3));
-        let readp = PipeReader::new(File::from_raw_handle(readpipe4));
-        Ok((processinfo.hProcess, readp, writep))
+        let write_file = File::from_raw_handle(writepipe3);
+        let read_file = File::from_raw_handle(readpipe4);
+        Ok((processinfo.hProcess, read_file, write_file))
     }
 }
 
@@ -163,6 +165,16 @@ pub fn wait_proc(pid: Process) -> std::io::Result<()> {
     use winapi::um::synchapi::WaitForSingleObject;
     unsafe {
         if WaitForSingleObject(pid, INFINITE) == WAIT_FAILED {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+pub fn kill_proc(p: Process) -> std::io::Result<()> {
+    unsafe {
+        if TerminateProcess(p, 1) == 0 {
             Err(std::io::Error::last_os_error())
         } else {
             Ok(())

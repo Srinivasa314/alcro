@@ -33,11 +33,12 @@ fn assets(req: HttpRequest) -> HttpResponse {
     }
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let (server_tx, server_rx) = mpsc::channel();
     let (port_tx, port_rx) = mpsc::channel();
 
-    // start actix web server in separate thread
+    // start actix web server in separate thread with its own runtime
     thread::spawn(move || {
         let sys = actix_rt::System::new();
 
@@ -62,16 +63,16 @@ fn main() -> anyhow::Result<()> {
     let port = port_rx.recv().unwrap();
     let server = server_rx.recv().unwrap();
 
-    // start in current thread
-    // and point it to a port that was bound
-    // to actix web server
+    // start the browser and point it to a port that
+    // was bound to actix web server
     let ui = UIBuilder::new()
         .content(Content::Url(&format!("http://127.0.0.1:{}", port)))
         .size(400, 400)
-        .run()?;
+        .run()
+        .await?;
 
-    ui.wait_finish();
+    ui.wait_finish().await;
     // gracefully shutdown actix web server
-    futures::executor::block_on(server.stop(true));
+    server.stop(true).await;
     Ok(())
 }

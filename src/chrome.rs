@@ -1,21 +1,21 @@
 use std::{
     fmt::Display,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, AtomicI32, Ordering},
+        Arc,
+    },
 };
 
-use crossbeam_channel::{bounded, Receiver, Sender};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::atomic::{AtomicI32, Ordering};
+use tokio::sync::{mpsc, oneshot, Mutex};
 
 mod devtools;
-use devtools::{readloop, recv_msg, send, send_msg};
+use devtools::{readloop, send};
 mod os;
 #[cfg(target_family = "windows")]
 use os::close_process_handle;
-#[cfg(target_family = "unix")]
-use os::kill_proc;
-use os::{exited, new_process, wait_proc, PipeReader, PipeWriter, Process};
+use os::{exited, kill_proc, new_process, wait_proc, PipeReader, PipeWriter, Process};
 
 /// A JS object. It is an alias for `serde_json::Value`. See it's documentation for how to use it.
 pub type JSObject = serde_json::Value;
@@ -58,60 +58,8 @@ impl ToResultOfJSError for JSResult {
     }
 }
 
-/// Context for an async binding function.
-pub struct BindingContext {
-    active: Option<ActiveBindingContext>,
-}
-
-impl BindingContext {
-    fn new(active: ActiveBindingContext) -> Self {
-        Self {
-            active: Some(active),
-        }
-    }
-
-    /// The arguments from JS.
-    pub fn args(&self) -> &[JSObject] {
-        match &self.active {
-            None => &[],
-            Some(active) => active.payload["args"].as_array().expect("Expected array"),
-        }
-    }
-
-    /// Completes the JS function successfully. Equivalent to `complete(Ok(result))`
-    pub fn done(self, result: JSObject) {
-        self.complete(Ok(result))
-    }
-
-    /// Completes the JS function with an error. Equivalent to `complete(Err(error))`
-    pub fn err(self, error: JSObject) {
-        self.complete(Err(error))
-    }
-
-    /// Completes the JS function, either successfully or not. Takes the [`BindingContext`] by
-    /// value as it releases the outstanding call on the Chrome(ium) side.
-    pub fn complete(mut self, result: JSResult) {
-        if let Some(incomplete) = self.active.take() {
-            complete_binding(incomplete, result)
-        }
-    }
-}
-
-impl Drop for BindingContext {
-    fn drop(&mut self) {
-        if let Some(incomplete) = self.active.take() {
-            complete_binding(incomplete, Ok(JSObject::Null))
-        }
-    }
-}
-
-struct ActiveBindingContext {
-    chrome: Arc<Chrome>,
-    payload: JSObject,
-    context_id: i64,
-}
-
-type BindingFunc = Arc<dyn Fn(BindingContext) + Sync + Send>;
+pub type BindingFuture = std::pin::Pin<Box<dyn std::future::Future<Output = JSResult> + Send>>;
+pub type BindingFunc = Arc<dyn Fn(Vec<JSObject>) -> BindingFuture + Sync + Send>;
 
 /// Where to log the browser's console messages and uncaught exceptions.
 ///
@@ -129,7 +77,7 @@ pub enum LogOutput {
 pub enum LogSink {
     Stdout,
     Stderr,
-    File(Mutex<std::fs::File>),
+    File(std::sync::Mutex<std::fs::File>),
 }
 
 pub struct Chrome {
@@ -139,16 +87,15 @@ pub struct Chrome {
     #[cfg(target_family = "windows")]
     pid: usize,
     psend: Mutex<PipeWriter>,
-    precv: Mutex<PipeReader>,
     target: String,
     session: String,
-    kill_send: Sender<()>,
-    load_send: Sender<()>,
-    load_recv: Receiver<()>,
-    log_sink: Option<LogSink>,
-    pending: dashmap::DashMap<i32, Sender<JSResult>>,
+    pending: dashmap::DashMap<i32, oneshot::Sender<JSResult>>,
     window: AtomicI32,
     bindings: dashmap::DashMap<String, BindingFunc>,
+    load_send: mpsc::Sender<()>,
+    load_recv: Mutex<mpsc::Receiver<()>>,
+    log_sink: Option<LogSink>,
+    closed: AtomicBool,
 }
 
 /// A struct that stores the size, position and window state of the browser window.
@@ -193,51 +140,43 @@ impl WindowState {
 }
 
 impl Chrome {
-    pub fn new_with_args(
+    pub async fn new_with_args(
         chrome_binary: &str,
         args: &[&str],
         url: &str,
         log_sink: Option<LogSink>,
     ) -> Result<Arc<Chrome>, JSError> {
-        let (pid, precv, psend) =
+        let (pid, read_file, write_file) =
             new_process(chrome_binary, &args).expect("Unable to launch chrome");
-        let (kill_send, kill_recv) = bounded(1);
-        let (load_send, load_recv) = bounded(1);
+        let mut precv = PipeReader::new(read_file).expect("Unable to open browser pipe");
+        let mut psend = PipeWriter::new(write_file).expect("Unable to open browser pipe");
 
-        let mut c = Chrome {
+        let target = find_target(&mut psend, &mut precv).await;
+        let session = start_session(&mut psend, &mut precv, &target).await?;
+
+        let (load_send, load_recv) = mpsc::channel(1);
+
+        let c_arc = Arc::new(Chrome {
             id: AtomicI32::new(2),
-            precv: Mutex::new(precv),
             psend: Mutex::new(psend),
-            target: String::new(),
-            session: String::new(),
+            target,
+            session,
             window: AtomicI32::new(0),
             pending: dashmap::DashMap::new(),
             bindings: dashmap::DashMap::new(),
-            kill_send,
             load_send,
-            load_recv,
+            load_recv: Mutex::new(load_recv),
             log_sink,
+            closed: AtomicBool::new(false),
             #[cfg(target_family = "windows")]
             pid: pid as usize,
             #[cfg(target_family = "unix")]
-            pid: pid,
-        };
-
-        c.target = c.find_target();
-        c.session = c.start_session()?;
-
-        let c_arc = Arc::new(c);
-
-        #[cfg(target_family = "unix")]
-        std::thread::spawn(move || {
-            kill_recv.recv().unwrap();
-            kill_proc(pid).expect("Unable to kill process");
+            pid,
         });
 
-        let c_arc_clone = c_arc.clone();
-        std::thread::spawn(move || readloop(c_arc_clone));
+        tokio::spawn(readloop(Arc::clone(&c_arc), precv));
 
-        for (method, args) in [
+        for (method, params) in [
             ("Page.enable", JSObject::Null),
             (
                 "Target.setAutoAttach",
@@ -253,73 +192,16 @@ impl Chrome {
         ]
         .iter()
         {
-            send(Arc::clone(&c_arc), method, args)?;
+            send(Arc::clone(&c_arc), method, params).await?;
         }
 
         if !args.contains(&"--headless") {
-            let win_id = get_window_for_target(Arc::clone(&c_arc))?;
-            Arc::clone(&c_arc).window.store(win_id, Ordering::Relaxed);
+            let win_id = get_window_for_target(Arc::clone(&c_arc)).await?;
+            c_arc.window.store(win_id, Ordering::Relaxed);
         }
 
-        load(Arc::clone(&c_arc), url)?;
+        load(Arc::clone(&c_arc), url).await?;
         Ok(c_arc)
-    }
-
-    fn find_target(&self) -> String {
-        send_msg(
-            &self.psend,
-            json!(
-            {
-            "id": 0,
-            "method": "Target.setDiscoverTargets",
-            "params": { "discover": true }
-            }
-            )
-            .to_string(),
-        );
-
-        loop {
-            let pmsg: JSObject =
-                serde_json::from_str(&recv_msg(&self.precv)).expect("Invalid JSON");
-            if pmsg["method"] == "Target.targetCreated" {
-                let params = &pmsg["params"];
-                if params["targetInfo"]["type"] == "page" {
-                    return params["targetInfo"]["targetId"]
-                        .as_str()
-                        .expect("Value not of string datatype")
-                        .to_string();
-                }
-            }
-        }
-    }
-
-    fn start_session(&self) -> Result<String, JSError> {
-        send_msg(
-            &self.psend,
-            json!(
-            {
-            "id": 1,
-            "method": "Target.attachToTarget",
-            "params": {"targetId": self.target}
-            }
-            )
-            .to_string(),
-        );
-
-        loop {
-            let pmsg: JSObject =
-                serde_json::from_str(&recv_msg(&self.precv)).expect("Invalid JSON");
-            if pmsg["id"] == 1 {
-                if pmsg["error"] != JSObject::Null {
-                    return Err(pmsg["error"].clone().into());
-                }
-                let session = &pmsg["result"];
-                return Ok(session["sessionId"]
-                    .as_str()
-                    .expect("Value not of string datatype")
-                    .to_string());
-            }
-        }
     }
 
     fn log(&self, msg: &JSObject) {
@@ -339,34 +221,114 @@ impl Chrome {
         exited(self.pid as Process).expect("Error in getting process state")
     }
 
-    pub fn wait_finish(&self) {
-        wait_proc(self.pid as Process).expect("Error in waiting for process")
+    pub async fn wait_finish(&self) {
+        let pid = self.pid;
+        tokio::task::spawn_blocking(move || wait_proc(pid as Process))
+            .await
+            .expect("Wait task panicked")
+            .expect("Error in waiting for process")
+    }
+
+    /// Synchronous best-effort kill of the browser process, for use in Drop.
+    pub fn kill(&self) {
+        let _ = kill_proc(self.pid as Process);
+        let _ = wait_proc(self.pid as Process);
     }
 }
 
-fn get_window_for_target(c: Arc<Chrome>) -> Result<i32, JSObject> {
+async fn find_target(psend: &mut PipeWriter, precv: &mut PipeReader) -> String {
+    psend
+        .write(
+            json!(
+            {
+            "id": 0,
+            "method": "Target.setDiscoverTargets",
+            "params": { "discover": true }
+            }
+            )
+            .to_string(),
+        )
+        .await
+        .expect("Unable to write to pipe");
+
+    loop {
+        let pmsg: JSObject =
+            serde_json::from_str(&precv.read().await.expect("Unable to read from pipe"))
+                .expect("Invalid JSON");
+        if pmsg["method"] == "Target.targetCreated" {
+            let params = &pmsg["params"];
+            if params["targetInfo"]["type"] == "page" {
+                return params["targetInfo"]["targetId"]
+                    .as_str()
+                    .expect("Value not of string datatype")
+                    .to_string();
+            }
+        }
+    }
+}
+
+async fn start_session(
+    psend: &mut PipeWriter,
+    precv: &mut PipeReader,
+    target: &str,
+) -> Result<String, JSError> {
+    psend
+        .write(
+            json!(
+            {
+            "id": 1,
+            "method": "Target.attachToTarget",
+            "params": {"targetId": target}
+            }
+            )
+            .to_string(),
+        )
+        .await
+        .expect("Unable to write to pipe");
+
+    loop {
+        let pmsg: JSObject =
+            serde_json::from_str(&precv.read().await.expect("Unable to read from pipe"))
+                .expect("Invalid JSON");
+        if pmsg["id"] == 1 {
+            if pmsg["error"] != JSObject::Null {
+                return Err(pmsg["error"].clone().into());
+            }
+            let session = &pmsg["result"];
+            return Ok(session["sessionId"]
+                .as_str()
+                .expect("Value not of string datatype")
+                .to_string());
+        }
+    }
+}
+
+async fn get_window_for_target(c: Arc<Chrome>) -> Result<i32, JSObject> {
     match send(
         Arc::clone(&c),
         "Browser.getWindowForTarget",
         &json!({
             "targetId": c.target
         }),
-    ) {
+    )
+    .await
+    {
         Ok(v) => Ok(v["windowId"].as_i64().expect("Value not i64") as i32),
         Err(e) => Err(e),
     }
 }
 
-pub fn load(c: Arc<Chrome>, url: &str) -> Result<(), JSError> {
-    while c.load_recv.try_recv().is_ok() {}
-    send(Arc::clone(&c), "Page.navigate", &json!({ "url": url })).to_result_of_jserror()?;
-    let _ = c
-        .load_recv
-        .recv_timeout(std::time::Duration::from_secs(30));
+pub async fn load(c: Arc<Chrome>, url: &str) -> Result<(), JSError> {
+    let mut load_recv = c.load_recv.lock().await;
+    while load_recv.try_recv().is_ok() {}
+    send(Arc::clone(&c), "Page.navigate", &json!({ "url": url }))
+        .await
+        .to_result_of_jserror()?;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(30), load_recv.recv()).await;
     Ok(())
 }
 
-pub fn eval(c: Arc<Chrome>, expr: &str) -> JSResult {
+pub async fn eval(c: Arc<Chrome>, expr: &str) -> JSResult {
     send(
         c,
         "Runtime.evaluate",
@@ -374,9 +336,10 @@ pub fn eval(c: Arc<Chrome>, expr: &str) -> JSResult {
             "expression": expr, "awaitPromise": true, "returnByValue": true
         }),
     )
+    .await
 }
 
-pub fn set_bounds(c: Arc<Chrome>, b: Bounds) -> Result<(), JSError> {
+pub async fn set_bounds(c: Arc<Chrome>, b: Bounds) -> Result<(), JSError> {
     let param = json!({
         "windowId": c.window,
         "bounds": if b.window_state != WindowState::Normal {
@@ -387,17 +350,21 @@ pub fn set_bounds(c: Arc<Chrome>, b: Bounds) -> Result<(), JSError> {
             serde_json::to_value(b).unwrap()
         }
     });
-    send(c, "Browser.setWindowBounds", &param).to_result_of_jserror()
+    send(c, "Browser.setWindowBounds", &param)
+        .await
+        .to_result_of_jserror()
 }
 
-pub fn bounds(c: Arc<Chrome>) -> Result<Bounds, JSObject> {
+pub async fn bounds(c: Arc<Chrome>) -> Result<Bounds, JSObject> {
     match send(
         Arc::clone(&c),
         "Browser.getWindowBounds",
         &json!({
             "windowId": c.window.load(Ordering::Relaxed)
         }),
-    ) {
+    )
+    .await
+    {
         Err(e) => Err(e),
         Ok(result) => {
             let ret: Bounds = serde_json::from_value(result["bounds"].clone())
@@ -407,23 +374,27 @@ pub fn bounds(c: Arc<Chrome>) -> Result<Bounds, JSObject> {
     }
 }
 
-pub fn load_js(c: Arc<Chrome>, script: &str) -> Result<(), JSError> {
+pub async fn load_js(c: Arc<Chrome>, script: &str) -> Result<(), JSError> {
     if let Err(e) = send(
         Arc::clone(&c),
         "Page.addScriptToEvaluateOnNewDocument",
         &json!({ "source": script }),
-    ) {
+    )
+    .await
+    {
         return Err(e.into());
     }
-    eval(Arc::clone(&c), &script).to_result_of_jserror()
+    eval(Arc::clone(&c), &script).await.to_result_of_jserror()
 }
 
-pub fn load_css(c: Arc<Chrome>, css: &str) -> Result<(), JSError> {
+pub async fn load_css(c: Arc<Chrome>, css: &str) -> Result<(), JSError> {
     let frame_tree = match send(
         Arc::clone(&c),
         "Page.getFrameTree",
         &json!({ "targetId": c.target }),
-    ) {
+    )
+    .await
+    {
         Ok(ft) => ft,
         Err(e) => return Err(e.into()),
     };
@@ -432,7 +403,9 @@ pub fn load_css(c: Arc<Chrome>, css: &str) -> Result<(), JSError> {
         Arc::clone(&c),
         "CSS.createStyleSheet",
         &json!({ "frameId": frame_id }),
-    ) {
+    )
+    .await
+    {
         Ok(ss) => ss,
         Err(e) => return Err(e.into()),
     };
@@ -442,17 +415,20 @@ pub fn load_css(c: Arc<Chrome>, css: &str) -> Result<(), JSError> {
         "CSS.setStyleSheetText",
         &json!({ "styleSheetId": style_sheet_id, "text": css }),
     )
+    .await
     .to_result_of_jserror()
 }
 
-pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> Result<(), JSError> {
+pub async fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> Result<(), JSError> {
     c.bindings.insert(name.to_string(), f);
 
     if let Err(e) = send(
         Arc::clone(&c),
         "Runtime.addBinding",
         &json!({ "name": name }),
-    ) {
+    )
+    .await
+    {
         return Err(e.into());
     }
 
@@ -489,52 +465,18 @@ pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> Result<(), JSError> {
         Arc::clone(&c),
         "Page.addScriptToEvaluateOnNewDocument",
         &json!({ "source": script }),
-    ) {
+    )
+    .await
+    {
         return Err(e.into());
     }
-    eval(Arc::clone(&c), &script).to_result_of_jserror()
+    eval(Arc::clone(&c), &script).await.to_result_of_jserror()
 }
 
-fn complete_binding(context: ActiveBindingContext, result: JSResult) {
-    let (r, e) = match result {
-        Ok(x) => (x.to_string(), r#""""#.to_string()),
-        Err(e) => ("".to_string(), e.to_string()),
-    };
-
-    let expr = format!(
-        r"
-        if ({error}) {{
-            window['{name}']['errors'].get({seq})({error});
-        }} else {{
-            window['{name}']['callbacks'].get({seq})({result});
-        }}
-        window['{name}']['callbacks'].delete({seq});
-        window['{name}']['errors'].delete({seq});
-        ",
-        name = context.payload["name"].as_str().expect("Expected string"),
-        seq = context.payload["seq"].as_i64().expect("Expected i64"),
-        result = r,
-        error = e
-    );
-
-    if let Err(e) = send(
-        context.chrome,
-        "Runtime.evaluate",
-        &json!({
-            "expression":expr,
-            "contextId":context.context_id
-        }),
-    ) {
+pub async fn close(c: Arc<Chrome>) {
+    if let Err(e) = send(c, "Browser.close", &json!({})).await {
         eprintln!("{}", e);
     }
-}
-
-pub fn close(c: Arc<Chrome>) {
-    std::thread::spawn(move || {
-        if let Err(e) = send(c, "Browser.close", &json!({})) {
-            eprintln!("{}", e);
-        }
-    });
 }
 
 #[cfg(target_family = "windows")]

@@ -1,7 +1,7 @@
 use alcro::{Content, LogOutput, UIBuilder};
 
-#[test]
-fn test_log_to_file() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_log_to_file() {
     let logfile = std::env::temp_dir().join("alcro_log_smoke.txt");
     let _ = std::fs::remove_file(&logfile);
 
@@ -10,8 +10,9 @@ fn test_log_to_file() {
         .custom_args(&["--headless"])
         .log_output(LogOutput::File(logfile.clone()))
         .run()
+        .await
         .expect("Unable to launch");
-    ui.eval("console.log('hello from js')").unwrap();
+    ui.eval("console.log('hello from js')").await.unwrap();
 
     let mut contents = String::new();
     for _ in 0..50 {
@@ -19,8 +20,8 @@ fn test_log_to_file() {
         if contents.contains("hello from js") {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-    assert!(contents.contains("hello from js"), "log file: {contents}");
+    assert!(contents.contains("hello from js"), "log file: {}", contents);
     let _ = std::fs::remove_file(&logfile);
 }
