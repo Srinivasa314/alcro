@@ -10,14 +10,13 @@ use nix::{
         stat::Mode,
         wait::{waitpid, WaitPidFlag, WaitStatus},
     },
-    unistd::{close, pipe, Pid},
+    unistd::{pipe, Pid},
 };
 use std::{
     fs::File,
     mem,
-    os::unix::prelude::FromRawFd,
+    os::fd::AsRawFd,
     ptr::{null, null_mut as NULL},
-    result::Result,
 };
 pub type Process = Pid;
 
@@ -33,8 +32,6 @@ pub fn new_process(path: &str, args: &[&str]) -> Result<(Process, File, File), n
     let null_write = open("/dev/null", OFlag::O_WRONLY, Mode::empty())?;
 
     let mut pid: pid_t = 0;
-    let read_file: File;
-    let write_file: File;
     unsafe {
         let mut file_actions: posix_spawn_file_actions_t = mem::zeroed();
         Errno::result(posix_spawn_file_actions_init(
@@ -42,27 +39,27 @@ pub fn new_process(path: &str, args: &[&str]) -> Result<(Process, File, File), n
         ))?;
         Errno::result(posix_spawn_file_actions_adddup2(
             &mut file_actions,
-            null_read,
+            null_read.as_raw_fd(),
             0,
         ))?;
         Errno::result(posix_spawn_file_actions_adddup2(
             &mut file_actions,
-            null_write,
+            null_write.as_raw_fd(),
             1,
         ))?;
         Errno::result(posix_spawn_file_actions_adddup2(
             &mut file_actions,
-            null_write,
+            null_write.as_raw_fd(),
             2,
         ))?;
         Errno::result(posix_spawn_file_actions_adddup2(
             &mut file_actions,
-            pipe3_read,
+            pipe3_read.as_raw_fd(),
             3,
         ))?;
         Errno::result(posix_spawn_file_actions_adddup2(
             &mut file_actions,
-            pipe4_write,
+            pipe4_write.as_raw_fd(),
             4,
         ))?;
 
@@ -84,14 +81,15 @@ pub fn new_process(path: &str, args: &[&str]) -> Result<(Process, File, File), n
             args_ptr_list.as_ptr(),
             environ,
         ))?;
-
-        write_file = File::from_raw_fd(pipe3_write);
-        read_file = File::from_raw_fd(pipe4_read);
     }
-    close(pipe3_read)?;
-    close(pipe4_write)?;
 
-    Ok((Pid::from_raw(pid), read_file, write_file))
+    // The child's ends (pipe3_read, pipe4_write) and the null fds are closed
+    // in the parent automatically when their OwnedFds drop here.
+    Ok((
+        Pid::from_raw(pid),
+        File::from(pipe4_read),
+        File::from(pipe3_write),
+    ))
 }
 
 pub fn kill_proc(p: Process) -> Result<(), nix::Error> {

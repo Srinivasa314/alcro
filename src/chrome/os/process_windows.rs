@@ -12,7 +12,6 @@ const FPIPE: u8 = 0x08;
 const FDEV: u8 = 0x40;
 pub type Process = HANDLE;
 
-use os_str_bytes::OsStrBytes;
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::OsStrExt;
 
@@ -213,9 +212,11 @@ fn append_arg(cmd: &mut Vec<u16>, arg: &OsStr, force_quotes: bool) -> io::Result
     // that it actually gets passed through on the command line or otherwise
     // it will be dropped entirely when parsed on the other end.
     ensure_no_nuls(arg)?;
-    let arg_bytes = &arg.to_raw_bytes();
-    let quote =
-        force_quotes || arg_bytes.iter().any(|c| *c == b' ' || *c == b'\t') || arg_bytes.is_empty();
+    let quote = force_quotes
+        || arg
+            .encode_wide()
+            .any(|c| c == ' ' as u16 || c == '\t' as u16)
+        || arg.is_empty();
     if quote {
         cmd.push('"' as u16);
     }

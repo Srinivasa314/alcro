@@ -14,14 +14,14 @@ async fn test_content() {
     );
 
     let ui2 = UIBuilder::new()
-        .content(Content::Url("https://www.google.com"))
+        .content(Content::Url("https://example.com"))
         .custom_args(&["--headless"])
         .run()
         .await
         .expect("Unable to launch");
     assert_eq!(
         ui2.eval("window.location.href").await.unwrap(),
-        "https://www.google.com/"
+        "https://example.com/"
     );
 }
 
