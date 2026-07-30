@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crossbeam_channel::{bounded, Sender};
+use crossbeam_channel::{bounded, Receiver, Sender};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -113,6 +113,25 @@ struct ActiveBindingContext {
 
 type BindingFunc = Arc<dyn Fn(BindingContext) + Sync + Send>;
 
+/// Where to log the browser's console messages and uncaught exceptions.
+///
+/// By default they are not logged.
+#[derive(Debug, Clone)]
+pub enum LogOutput {
+    /// Log to standard output
+    Stdout,
+    /// Log to standard error
+    Stderr,
+    /// Log to the given file
+    File(std::path::PathBuf),
+}
+
+pub enum LogSink {
+    Stdout,
+    Stderr,
+    File(Mutex<std::fs::File>),
+}
+
 pub struct Chrome {
     id: AtomicI32,
     #[cfg(target_family = "unix")]
@@ -124,6 +143,9 @@ pub struct Chrome {
     target: String,
     session: String,
     kill_send: Sender<()>,
+    load_send: Sender<()>,
+    load_recv: Receiver<()>,
+    log_sink: Option<LogSink>,
     pending: dashmap::DashMap<i32, Sender<JSResult>>,
     window: AtomicI32,
     bindings: dashmap::DashMap<String, BindingFunc>,
@@ -171,10 +193,16 @@ impl WindowState {
 }
 
 impl Chrome {
-    pub fn new_with_args(chrome_binary: &str, args: &[&str]) -> Result<Arc<Chrome>, JSError> {
+    pub fn new_with_args(
+        chrome_binary: &str,
+        args: &[&str],
+        url: &str,
+        log_sink: Option<LogSink>,
+    ) -> Result<Arc<Chrome>, JSError> {
         let (pid, precv, psend) =
             new_process(chrome_binary, &args).expect("Unable to launch chrome");
         let (kill_send, kill_recv) = bounded(1);
+        let (load_send, load_recv) = bounded(1);
 
         let mut c = Chrome {
             id: AtomicI32::new(2),
@@ -186,6 +214,9 @@ impl Chrome {
             pending: dashmap::DashMap::new(),
             bindings: dashmap::DashMap::new(),
             kill_send,
+            load_send,
+            load_recv,
+            log_sink,
             #[cfg(target_family = "windows")]
             pid: pid as usize,
             #[cfg(target_family = "unix")]
@@ -229,6 +260,8 @@ impl Chrome {
             let win_id = get_window_for_target(Arc::clone(&c_arc))?;
             Arc::clone(&c_arc).window.store(win_id, Ordering::Relaxed);
         }
+
+        load(Arc::clone(&c_arc), url)?;
         Ok(c_arc)
     }
 
@@ -289,6 +322,19 @@ impl Chrome {
         }
     }
 
+    fn log(&self, msg: &JSObject) {
+        use std::io::Write;
+        match &self.log_sink {
+            None => {}
+            Some(LogSink::Stdout) => println!("Message: {}", msg),
+            Some(LogSink::Stderr) => eprintln!("Message: {}", msg),
+            Some(LogSink::File(f)) => {
+                let mut f = f.lock().expect("Unable to lock");
+                let _ = writeln!(f, "Message: {}", msg);
+            }
+        }
+    }
+
     pub fn done(&self) -> bool {
         exited(self.pid as Process).expect("Error in getting process state")
     }
@@ -312,7 +358,12 @@ fn get_window_for_target(c: Arc<Chrome>) -> Result<i32, JSObject> {
 }
 
 pub fn load(c: Arc<Chrome>, url: &str) -> Result<(), JSError> {
-    send(Arc::clone(&c), "Page.navigate", &json!({ "url": url })).to_result_of_jserror()
+    while c.load_recv.try_recv().is_ok() {}
+    send(Arc::clone(&c), "Page.navigate", &json!({ "url": url })).to_result_of_jserror()?;
+    let _ = c
+        .load_recv
+        .recv_timeout(std::time::Duration::from_secs(30));
+    Ok(())
 }
 
 pub fn eval(c: Arc<Chrome>, expr: &str) -> JSResult {

@@ -36,8 +36,8 @@
 mod chrome;
 #[cfg(target_family = "windows")]
 use chrome::close_handle;
-use chrome::{bind, bounds, close, eval, load, load_css, load_js, set_bounds, Chrome};
-pub use chrome::{BindingContext, Bounds, JSError, JSObject, JSResult, WindowState};
+use chrome::{bind, bounds, close, eval, load, load_css, load_js, set_bounds, Chrome, LogSink};
+pub use chrome::{BindingContext, Bounds, JSError, JSObject, JSResult, LogOutput, WindowState};
 mod locate;
 pub use locate::tinyfiledialogs as dialog;
 use locate::{locate_chrome, LocateChromeError};
@@ -95,6 +95,9 @@ pub enum UILaunchError {
     /// Error when initializing chrome
     #[error("Error when initializing chrome: {0}")]
     ChromeInitError(#[from] JSError),
+    /// Cannot create the log file
+    #[error("Cannot create log file: {0}")]
+    LogFileCreationError(std::io::Error),
 }
 
 impl UI {
@@ -104,6 +107,7 @@ impl UI {
         width: i32,
         height: i32,
         custom_args: &[&str],
+        log_output: Option<&LogOutput>,
     ) -> Result<UI, UILaunchError> {
         let _tmpdir;
         let dir = match dir {
@@ -144,7 +148,15 @@ impl UI {
             }
             Err(_) => locate_chrome()?,
         };
-        let chrome = Chrome::new_with_args(&chrome_path, &args)?;
+        let log_sink = match log_output {
+            None => None,
+            Some(LogOutput::Stdout) => Some(LogSink::Stdout),
+            Some(LogOutput::Stderr) => Some(LogSink::Stderr),
+            Some(LogOutput::File(path)) => Some(LogSink::File(std::sync::Mutex::new(
+                std::fs::File::create(path).map_err(UILaunchError::LogFileCreationError)?,
+            ))),
+        };
+        let chrome = Chrome::new_with_args(&chrome_path, &args, url, log_sink)?;
         Ok(UI {
             chrome,
             _tmpdir,
@@ -444,6 +456,7 @@ pub struct UIBuilder<'a> {
     width: i32,
     height: i32,
     custom_args: &'a [&'a str],
+    log_output: Option<LogOutput>,
 }
 
 impl<'a> Default for UIBuilder<'a> {
@@ -461,6 +474,7 @@ impl<'a> UIBuilder<'a> {
             width: 800,
             height: 600,
             custom_args: &[],
+            log_output: None,
         }
     }
 
@@ -474,7 +488,14 @@ impl<'a> UIBuilder<'a> {
                 &html
             }
         };
-        UI::new(url, self.dir, self.width, self.height, self.custom_args)
+        UI::new(
+            url,
+            self.dir,
+            self.width,
+            self.height,
+            self.custom_args,
+            self.log_output.as_ref(),
+        )
     }
 
     /// Set the content (url or html text)
@@ -499,6 +520,13 @@ impl<'a> UIBuilder<'a> {
     /// Add custom arguments to spawn chrome with
     pub fn custom_args(&mut self, custom_args: &'a [&'a str]) -> &mut Self {
         self.custom_args = custom_args;
+        self
+    }
+
+    /// Log the browser's console messages and uncaught exceptions to the given
+    /// destination. By default they are not logged.
+    pub fn log_output(&mut self, log_output: LogOutput) -> &mut Self {
+        self.log_output = Some(log_output);
         self
     }
 }

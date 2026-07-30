@@ -43,10 +43,12 @@ pub fn readloop(c: Arc<Chrome>) {
                 .expect("message should be a string");
             let res: JSObject = serde_json::from_str(message).expect("Invalid JSON");
 
-            if res["id"] == JSObject::Null && res["method"] == "Runtime.consoleAPICalled"
+            if res["id"] == JSObject::Null && res["method"] == "Page.loadEventFired" {
+                let _ = c.load_send.try_send(());
+            } else if res["id"] == JSObject::Null && res["method"] == "Runtime.consoleAPICalled"
                 || res["method"] == "Runtime.exceptionThrown"
             {
-                println!("Message: {}", res);
+                c.log(&res);
             } else if res["id"] == JSObject::Null && res["method"] == "Runtime.bindingCalled" {
                 let payload: JSObject = serde_json::from_str(
                     res["params"]["payload"]
