@@ -38,20 +38,16 @@
 //!
 
 mod chrome;
-#[cfg(target_family = "windows")]
-use chrome::close_handle;
 use chrome::{
-    bind, bounds, close, eval, load, load_css, load_js, set_bounds, BindingFunc, Chrome, LogSink,
+    bind, bounds, close, eval, launch, load, load_css, load_js, new_window, set_bounds,
+    BindingFunc, LogSink, Window,
 };
 pub use chrome::{Bounds, JSError, JSObject, JSResult, LogOutput, WindowState};
 mod locate;
 pub use locate::tinyfiledialogs as dialog;
 use locate::{locate_chrome, LocateChromeError};
 use std::future::Future;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::Arc;
 
 const DEFAULT_CHROME_ARGS: &[&str] = &[
     "--disable-background-networking",
@@ -80,11 +76,13 @@ const DEFAULT_CHROME_ARGS: &[&str] = &[
     "--use-mock-keychain",
 ];
 
-/// The browser window
+/// A browser window.
+///
+/// The browser process is shared: [`UIBuilder::run()`] launches a browser with
+/// its first window, and [`UI::new_window()`] opens further windows in the
+/// same browser. The process exits when its last window is closed or dropped.
 pub struct UI {
-    chrome: Arc<Chrome>,
-    _tmpdir: Option<tempfile::TempDir>,
-    waited: AtomicBool,
+    window: Arc<Window>,
 }
 
 /// Error in launching a UI window
@@ -163,31 +161,59 @@ impl UI {
                 std::fs::File::create(path).map_err(UILaunchError::LogFileCreationError)?,
             ))),
         };
-        let chrome = Chrome::new_with_args(&chrome_path, &args, url, log_sink).await?;
-        Ok(UI {
-            chrome,
-            _tmpdir,
-            waited: AtomicBool::new(false),
-        })
+        let window = launch(&chrome_path, &args, url, log_sink, _tmpdir).await?;
+        Ok(UI { window })
     }
 
-    /// Returns true if the browser is closed
+    /// Open another window in the same browser process and wait for its
+    /// content to load. It returns Err if it fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![windows_subsystem = "windows"]
+    /// use alcro::{Content, UIBuilder};
+    /// # tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap().block_on(async {
+    /// let ui = UIBuilder::new()
+    ///     .content(Content::Html("<html><body>first</body></html>"))
+    ///     .custom_args(&["--headless"])
+    ///     .run().await.expect("Unable to launch");
+    /// let ui2 = ui.new_window(Content::Html("<html><body>second</body></html>"))
+    ///     .await.expect("Unable to open window");
+    /// assert_eq!(ui.eval("document.body.innerText").await.unwrap(), "first");
+    /// assert_eq!(ui2.eval("document.body.innerText").await.unwrap(), "second");
+    /// # });
+    /// ```
+    pub async fn new_window(&self, content: Content<'_>) -> Result<UI, JSError> {
+        let html: String;
+        let url = match content {
+            Content::Url(u) => u,
+            Content::Html(h) => {
+                html = format!("data:text/html,{}", h);
+                &html
+            }
+        };
+        let window = new_window(&self.window, url).await?;
+        Ok(UI { window })
+    }
+
+    /// Returns true if this window is closed
     pub fn done(&self) -> bool {
-        self.chrome.done()
+        self.window.is_closed()
     }
 
-    /// Wait for the browser to be closed
+    /// Wait for this window to be closed
     pub async fn wait_finish(&self) {
-        self.chrome.wait_finish().await;
-        self.waited.store(true, Ordering::Relaxed);
+        self.window.wait_closed().await;
     }
 
-    /// Close the browser window gracefully
+    /// Close this window gracefully. The browser process exits when its last
+    /// window is closed.
     pub async fn close(&self) {
-        close(self.chrome.clone()).await
+        close(&self.window).await
     }
 
-    /// Load content in the browser and wait for the page to load. It returns Err if it fails.
+    /// Load content in the window and wait for the page to load. It returns Err if it fails.
     pub async fn load(&self, content: Content<'_>) -> Result<(), JSError> {
         let html: String;
         let url = match content {
@@ -197,7 +223,7 @@ impl UI {
                 &html
             }
         };
-        load(self.chrome.clone(), url).await
+        load(&self.window, url).await
     }
 
     /// Bind a rust function so that JS code can use it. It returns Err if it fails.
@@ -243,7 +269,7 @@ impl UI {
         Fut: Future<Output = JSResult> + Send + 'static,
     {
         let func: BindingFunc = Arc::new(move |args| Box::pin(f(args)));
-        bind(self.chrome.clone(), name, func).await
+        bind(&self.window, name, func).await
     }
 
     /// Evaluates js code and returns the result.
@@ -261,7 +287,7 @@ impl UI {
     /// # });
     /// ```
     pub async fn eval(&self, js: &str) -> JSResult {
-        eval(self.chrome.clone(), js).await
+        eval(&self.window, js).await
     }
 
     /// Evaluates js code and adds functions before document loads. Loaded js is unloaded on reload.
@@ -282,7 +308,7 @@ impl UI {
     /// # });
     /// ```
     pub async fn load_js(&self, script: &str) -> Result<(), JSError> {
-        load_js(self.chrome.clone(), script).await
+        load_js(&self.window, script).await
     }
 
     /// Loads CSS into current window. Loaded CSS is unloaded on reload.
@@ -302,33 +328,38 @@ impl UI {
     /// # });
     /// ```
     pub async fn load_css(&self, css: &str) -> Result<(), JSError> {
-        load_css(self.chrome.clone(), css).await
+        load_css(&self.window, css).await
     }
 
     /// It changes the size, position or state of the browser window specified by the `Bounds` struct. It returns Err if it fails.
     ///
     /// To change the window state alone use `WindowState::to_bounds()`
     pub async fn set_bounds(&self, b: Bounds) -> Result<(), JSError> {
-        set_bounds(self.chrome.clone(), b).await
+        set_bounds(&self.window, b).await
     }
 
     /// It gets the size, position and state of the browser window. It returns Err if it fails.
     pub async fn bounds(&self) -> Result<Bounds, JSObject> {
-        bounds(self.chrome.clone()).await
+        bounds(&self.window).await
     }
 }
 
-/// Dropping a `UI` kills the browser process if it is still running.
+/// Dropping a `UI` closes its window; when it is the last open window of the
+/// browser, the browser process is killed instead.
 ///
 /// Drop cannot wait for a graceful shutdown; to close the browser gracefully call
 /// [`UI::close()`] and [`UI::wait_finish()`] before dropping.
 impl Drop for UI {
     fn drop(&mut self) {
-        if !self.waited.load(Ordering::Relaxed) && !self.done() {
-            self.chrome.kill();
+        if self.window.is_closed() {
+            return;
         }
-        #[cfg(target_family = "windows")]
-        close_handle(self.chrome.clone());
+        if !self.window.has_other_live_windows() {
+            self.window.kill_browser();
+        } else if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let window = self.window.clone();
+            handle.spawn(async move { close(&window).await });
+        }
     }
 }
 

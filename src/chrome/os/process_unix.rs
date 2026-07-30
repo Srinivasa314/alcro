@@ -8,7 +8,7 @@ use nix::{
     sys::{
         signal::{kill, Signal},
         stat::Mode,
-        wait::{waitpid, WaitPidFlag, WaitStatus},
+        wait::waitpid,
     },
     unistd::{pipe, Pid},
 };
@@ -94,13 +94,6 @@ pub fn new_process(path: &str, args: &[&str]) -> Result<(Process, File, File), n
 
 pub fn kill_proc(p: Process) -> Result<(), nix::Error> {
     kill(p, Signal::SIGTERM)
-}
-
-pub fn exited(pid: Process) -> std::result::Result<bool, nix::Error> {
-    match waitpid(pid, Some(WaitPidFlag::WNOHANG))? {
-        WaitStatus::Exited(_, _) => Ok(true),
-        _ => Ok(false),
-    }
 }
 
 pub fn wait_proc(pid: Process) -> Result<(), nix::Error> {

@@ -2,20 +2,20 @@ use std::{
     fmt::Display,
     sync::{
         atomic::{AtomicBool, AtomicI32, Ordering},
-        Arc,
+        Arc, Weak,
     },
 };
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 mod devtools;
-use devtools::{readloop, send};
+use devtools::{readloop, send, send_browser};
 mod os;
 #[cfg(target_family = "windows")]
 use os::close_process_handle;
-use os::{exited, kill_proc, new_process, wait_proc, PipeReader, PipeWriter, Process};
+use os::{kill_proc, new_process, wait_proc, PipeReader, PipeWriter, Process};
 
 /// A JS object. It is an alias for `serde_json::Value`. See it's documentation for how to use it.
 pub type JSObject = serde_json::Value;
@@ -80,6 +80,7 @@ pub enum LogSink {
     File(std::sync::Mutex<std::fs::File>),
 }
 
+/// The browser process, shared by all of its windows.
 pub struct Chrome {
     id: AtomicI32,
     #[cfg(target_family = "unix")]
@@ -87,15 +88,26 @@ pub struct Chrome {
     #[cfg(target_family = "windows")]
     pid: usize,
     psend: Mutex<PipeWriter>,
+    pending: dashmap::DashMap<i32, oneshot::Sender<JSResult>>,
+    pending_browser: dashmap::DashMap<i32, oneshot::Sender<JSResult>>,
+    windows: dashmap::DashMap<String, Weak<Window>>,
+    headless: bool,
+    log_sink: Option<LogSink>,
+    closed: AtomicBool,
+    _tmpdir: Option<tempfile::TempDir>,
+}
+
+/// One browser window (a devtools target with its own session).
+pub struct Window {
+    chrome: Arc<Chrome>,
     target: String,
     session: String,
-    pending: dashmap::DashMap<i32, oneshot::Sender<JSResult>>,
-    window: AtomicI32,
+    window_id: AtomicI32,
     bindings: dashmap::DashMap<String, BindingFunc>,
     load_send: mpsc::Sender<()>,
     load_recv: Mutex<mpsc::Receiver<()>>,
-    log_sink: Option<LogSink>,
-    closed: AtomicBool,
+    closed_tx: watch::Sender<bool>,
+    closed_rx: watch::Receiver<bool>,
 }
 
 /// A struct that stores the size, position and window state of the browser window.
@@ -140,70 +152,6 @@ impl WindowState {
 }
 
 impl Chrome {
-    pub async fn new_with_args(
-        chrome_binary: &str,
-        args: &[&str],
-        url: &str,
-        log_sink: Option<LogSink>,
-    ) -> Result<Arc<Chrome>, JSError> {
-        let (pid, read_file, write_file) =
-            new_process(chrome_binary, &args).expect("Unable to launch chrome");
-        let mut precv = PipeReader::new(read_file).expect("Unable to open browser pipe");
-        let mut psend = PipeWriter::new(write_file).expect("Unable to open browser pipe");
-
-        let target = find_target(&mut psend, &mut precv).await;
-        let session = start_session(&mut psend, &mut precv, &target).await?;
-
-        let (load_send, load_recv) = mpsc::channel(1);
-
-        let c_arc = Arc::new(Chrome {
-            id: AtomicI32::new(2),
-            psend: Mutex::new(psend),
-            target,
-            session,
-            window: AtomicI32::new(0),
-            pending: dashmap::DashMap::new(),
-            bindings: dashmap::DashMap::new(),
-            load_send,
-            load_recv: Mutex::new(load_recv),
-            log_sink,
-            closed: AtomicBool::new(false),
-            #[cfg(target_family = "windows")]
-            pid: pid as usize,
-            #[cfg(target_family = "unix")]
-            pid,
-        });
-
-        tokio::spawn(readloop(Arc::clone(&c_arc), precv));
-
-        for (method, params) in [
-            ("Page.enable", JSObject::Null),
-            (
-                "Target.setAutoAttach",
-                json!({"autoAttach": true, "waitForDebuggerOnStart": false}),
-            ),
-            ("Network.enable", JSObject::Null),
-            ("Runtime.enable", JSObject::Null),
-            ("Security.enable", JSObject::Null),
-            ("Performance.enable", JSObject::Null),
-            ("Log.enable", JSObject::Null),
-            ("DOM.enable", JSObject::Null),
-            ("CSS.enable", JSObject::Null),
-        ]
-        .iter()
-        {
-            send(Arc::clone(&c_arc), method, params).await?;
-        }
-
-        if !args.contains(&"--headless") {
-            let win_id = get_window_for_target(Arc::clone(&c_arc)).await?;
-            c_arc.window.store(win_id, Ordering::Relaxed);
-        }
-
-        load(Arc::clone(&c_arc), url).await?;
-        Ok(c_arc)
-    }
-
     fn log(&self, msg: &JSObject) {
         use std::io::Write;
         match &self.log_sink {
@@ -217,23 +165,167 @@ impl Chrome {
         }
     }
 
-    pub fn done(&self) -> bool {
-        exited(self.pid as Process).expect("Error in getting process state")
+    fn kill_process(&self) {
+        let _ = kill_proc(self.pid as Process);
     }
+}
 
-    pub async fn wait_finish(&self) {
-        let pid = self.pid;
-        tokio::task::spawn_blocking(move || wait_proc(pid as Process))
-            .await
-            .expect("Wait task panicked")
-            .expect("Error in waiting for process")
-    }
-
-    /// Synchronous best-effort kill of the browser process, for use in Drop.
-    pub fn kill(&self) {
+/// The browser process is killed when the last reference to it (via its
+/// windows) is dropped.
+impl Drop for Chrome {
+    fn drop(&mut self) {
         let _ = kill_proc(self.pid as Process);
         let _ = wait_proc(self.pid as Process);
+        #[cfg(target_family = "windows")]
+        let _ = close_process_handle(self.pid as Process);
     }
+}
+
+impl Window {
+    /// Returns true if this window has been closed
+    pub fn is_closed(&self) -> bool {
+        *self.closed_rx.borrow()
+    }
+
+    /// Wait until this window is closed
+    pub async fn wait_closed(&self) {
+        let mut rx = self.closed_rx.clone();
+        let _ = rx.wait_for(|closed| *closed).await;
+    }
+
+    /// Returns true if any other window of the same browser is still open
+    pub fn has_other_live_windows(&self) -> bool {
+        self.chrome.windows.iter().any(|e| {
+            e.key() != &self.session
+                && e.value()
+                    .upgrade()
+                    .map_or(false, |w| !w.is_closed())
+        })
+    }
+
+    /// Synchronous best-effort kill of the whole browser, for use in Drop.
+    pub fn kill_browser(&self) {
+        self.chrome.kill_process();
+    }
+}
+
+/// Launch the browser process and return its first window.
+pub async fn launch(
+    chrome_binary: &str,
+    args: &[&str],
+    url: &str,
+    log_sink: Option<LogSink>,
+    tmpdir: Option<tempfile::TempDir>,
+) -> Result<Arc<Window>, JSError> {
+    let (pid, read_file, write_file) =
+        new_process(chrome_binary, &args).expect("Unable to launch chrome");
+    let mut precv = PipeReader::new(read_file).expect("Unable to open browser pipe");
+    let mut psend = PipeWriter::new(write_file).expect("Unable to open browser pipe");
+
+    let target = find_target(&mut psend, &mut precv).await;
+    let session = start_session(&mut psend, &mut precv, &target).await?;
+
+    let c_arc = Arc::new(Chrome {
+        id: AtomicI32::new(2),
+        psend: Mutex::new(psend),
+        pending: dashmap::DashMap::new(),
+        pending_browser: dashmap::DashMap::new(),
+        windows: dashmap::DashMap::new(),
+        headless: args.contains(&"--headless"),
+        log_sink,
+        closed: AtomicBool::new(false),
+        _tmpdir: tmpdir,
+        #[cfg(target_family = "windows")]
+        pid: pid as usize,
+        #[cfg(target_family = "unix")]
+        pid,
+    });
+
+    let window = register_window(&c_arc, target, session);
+    tokio::spawn(readloop(Arc::clone(&c_arc), precv));
+
+    init_window(&window, url).await?;
+    Ok(window)
+}
+
+/// Open another window in the same browser process.
+pub async fn new_window(w: &Arc<Window>, url: &str) -> Result<Arc<Window>, JSError> {
+    let c = &w.chrome;
+    let mut params = json!({ "url": "about:blank" });
+    if !c.headless {
+        params["newWindow"] = json!(true);
+    }
+    let target = send_browser(c, "Target.createTarget", &params)
+        .await
+        .map_err(JSError::from)?["targetId"]
+        .as_str()
+        .expect("Value not of string datatype")
+        .to_string();
+    let session = send_browser(c, "Target.attachToTarget", &json!({ "targetId": target }))
+        .await
+        .map_err(JSError::from)?["sessionId"]
+        .as_str()
+        .expect("Value not of string datatype")
+        .to_string();
+
+    let window = register_window(c, target, session);
+    init_window(&window, url).await?;
+    Ok(window)
+}
+
+fn register_window(c: &Arc<Chrome>, target: String, session: String) -> Arc<Window> {
+    let (load_send, load_recv) = mpsc::channel(1);
+    let (closed_tx, closed_rx) = watch::channel(false);
+    let window = Arc::new(Window {
+        chrome: Arc::clone(c),
+        target,
+        session: session.clone(),
+        window_id: AtomicI32::new(0),
+        bindings: dashmap::DashMap::new(),
+        load_send,
+        load_recv: Mutex::new(load_recv),
+        closed_tx,
+        closed_rx,
+    });
+    c.windows.insert(session, Arc::downgrade(&window));
+    window
+}
+
+/// Enable the devtools domains on a fresh session and load the initial url.
+async fn init_window(w: &Arc<Window>, url: &str) -> Result<(), JSError> {
+    for (method, params) in [
+        ("Page.enable", JSObject::Null),
+        (
+            "Target.setAutoAttach",
+            json!({"autoAttach": true, "waitForDebuggerOnStart": false}),
+        ),
+        ("Network.enable", JSObject::Null),
+        ("Runtime.enable", JSObject::Null),
+        ("Security.enable", JSObject::Null),
+        ("Performance.enable", JSObject::Null),
+        ("Log.enable", JSObject::Null),
+        ("DOM.enable", JSObject::Null),
+        ("CSS.enable", JSObject::Null),
+    ]
+    .iter()
+    {
+        send(w, method, params).await?;
+    }
+
+    if !w.chrome.headless {
+        let win_id = send(
+            w,
+            "Browser.getWindowForTarget",
+            &json!({ "targetId": w.target }),
+        )
+        .await
+        .map_err(JSError::from)?["windowId"]
+            .as_i64()
+            .expect("Value not i64") as i32;
+        w.window_id.store(win_id, Ordering::Relaxed);
+    }
+
+    load(w, url).await
 }
 
 async fn find_target(psend: &mut PipeWriter, precv: &mut PipeReader) -> String {
@@ -303,34 +395,19 @@ async fn start_session(
     }
 }
 
-async fn get_window_for_target(c: Arc<Chrome>) -> Result<i32, JSObject> {
-    match send(
-        Arc::clone(&c),
-        "Browser.getWindowForTarget",
-        &json!({
-            "targetId": c.target
-        }),
-    )
-    .await
-    {
-        Ok(v) => Ok(v["windowId"].as_i64().expect("Value not i64") as i32),
-        Err(e) => Err(e),
-    }
-}
-
-pub async fn load(c: Arc<Chrome>, url: &str) -> Result<(), JSError> {
-    let mut load_recv = c.load_recv.lock().await;
+pub async fn load(w: &Arc<Window>, url: &str) -> Result<(), JSError> {
+    let mut load_recv = w.load_recv.lock().await;
     while load_recv.try_recv().is_ok() {}
-    send(Arc::clone(&c), "Page.navigate", &json!({ "url": url }))
+    send(w, "Page.navigate", &json!({ "url": url }))
         .await
         .to_result_of_jserror()?;
     let _ = tokio::time::timeout(std::time::Duration::from_secs(30), load_recv.recv()).await;
     Ok(())
 }
 
-pub async fn eval(c: Arc<Chrome>, expr: &str) -> JSResult {
+pub async fn eval(w: &Arc<Window>, expr: &str) -> JSResult {
     send(
-        c,
+        w,
         "Runtime.evaluate",
         &json!({
             "expression": expr, "awaitPromise": true, "returnByValue": true
@@ -339,9 +416,9 @@ pub async fn eval(c: Arc<Chrome>, expr: &str) -> JSResult {
     .await
 }
 
-pub async fn set_bounds(c: Arc<Chrome>, b: Bounds) -> Result<(), JSError> {
+pub async fn set_bounds(w: &Arc<Window>, b: Bounds) -> Result<(), JSError> {
     let param = json!({
-        "windowId": c.window,
+        "windowId": w.window_id.load(Ordering::Relaxed),
         "bounds": if b.window_state != WindowState::Normal {
             json!({
                 "windowState":b.window_state
@@ -350,17 +427,17 @@ pub async fn set_bounds(c: Arc<Chrome>, b: Bounds) -> Result<(), JSError> {
             serde_json::to_value(b).unwrap()
         }
     });
-    send(c, "Browser.setWindowBounds", &param)
+    send(w, "Browser.setWindowBounds", &param)
         .await
         .to_result_of_jserror()
 }
 
-pub async fn bounds(c: Arc<Chrome>) -> Result<Bounds, JSObject> {
+pub async fn bounds(w: &Arc<Window>) -> Result<Bounds, JSObject> {
     match send(
-        Arc::clone(&c),
+        w,
         "Browser.getWindowBounds",
         &json!({
-            "windowId": c.window.load(Ordering::Relaxed)
+            "windowId": w.window_id.load(Ordering::Relaxed)
         }),
     )
     .await
@@ -374,9 +451,9 @@ pub async fn bounds(c: Arc<Chrome>) -> Result<Bounds, JSObject> {
     }
 }
 
-pub async fn load_js(c: Arc<Chrome>, script: &str) -> Result<(), JSError> {
+pub async fn load_js(w: &Arc<Window>, script: &str) -> Result<(), JSError> {
     if let Err(e) = send(
-        Arc::clone(&c),
+        w,
         "Page.addScriptToEvaluateOnNewDocument",
         &json!({ "source": script }),
     )
@@ -384,34 +461,22 @@ pub async fn load_js(c: Arc<Chrome>, script: &str) -> Result<(), JSError> {
     {
         return Err(e.into());
     }
-    eval(Arc::clone(&c), &script).await.to_result_of_jserror()
+    eval(w, &script).await.to_result_of_jserror()
 }
 
-pub async fn load_css(c: Arc<Chrome>, css: &str) -> Result<(), JSError> {
-    let frame_tree = match send(
-        Arc::clone(&c),
-        "Page.getFrameTree",
-        &json!({ "targetId": c.target }),
-    )
-    .await
-    {
+pub async fn load_css(w: &Arc<Window>, css: &str) -> Result<(), JSError> {
+    let frame_tree = match send(w, "Page.getFrameTree", &json!({ "targetId": w.target })).await {
         Ok(ft) => ft,
         Err(e) => return Err(e.into()),
     };
     let frame_id = frame_tree["frameTree"]["frame"]["id"].as_str().unwrap();
-    let style_sheet = match send(
-        Arc::clone(&c),
-        "CSS.createStyleSheet",
-        &json!({ "frameId": frame_id }),
-    )
-    .await
-    {
+    let style_sheet = match send(w, "CSS.createStyleSheet", &json!({ "frameId": frame_id })).await {
         Ok(ss) => ss,
         Err(e) => return Err(e.into()),
     };
     let style_sheet_id = style_sheet["styleSheetId"].as_str().unwrap();
     send(
-        Arc::clone(&c),
+        w,
         "CSS.setStyleSheetText",
         &json!({ "styleSheetId": style_sheet_id, "text": css }),
     )
@@ -419,16 +484,10 @@ pub async fn load_css(c: Arc<Chrome>, css: &str) -> Result<(), JSError> {
     .to_result_of_jserror()
 }
 
-pub async fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> Result<(), JSError> {
-    c.bindings.insert(name.to_string(), f);
+pub async fn bind(w: &Arc<Window>, name: &str, f: BindingFunc) -> Result<(), JSError> {
+    w.bindings.insert(name.to_string(), f);
 
-    if let Err(e) = send(
-        Arc::clone(&c),
-        "Runtime.addBinding",
-        &json!({ "name": name }),
-    )
-    .await
-    {
+    if let Err(e) = send(w, "Runtime.addBinding", &json!({ "name": name })).await {
         return Err(e.into());
     }
 
@@ -462,7 +521,7 @@ pub async fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> Result<(), JSEr
     );
 
     if let Err(e) = send(
-        Arc::clone(&c),
+        w,
         "Page.addScriptToEvaluateOnNewDocument",
         &json!({ "source": script }),
     )
@@ -470,16 +529,18 @@ pub async fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> Result<(), JSEr
     {
         return Err(e.into());
     }
-    eval(Arc::clone(&c), &script).await.to_result_of_jserror()
+    eval(w, &script).await.to_result_of_jserror()
 }
 
-pub async fn close(c: Arc<Chrome>) {
-    if let Err(e) = send(c, "Browser.close", &json!({})).await {
+/// Close this window. The browser process exits when its last window closes.
+pub async fn close(w: &Arc<Window>) {
+    if let Err(e) = send_browser(
+        &w.chrome,
+        "Target.closeTarget",
+        &json!({ "targetId": w.target }),
+    )
+    .await
+    {
         eprintln!("{}", e);
     }
-}
-
-#[cfg(target_family = "windows")]
-pub fn close_handle(c: Arc<Chrome>) {
-    close_process_handle(c.pid as Process).expect("Unable to close handle")
 }

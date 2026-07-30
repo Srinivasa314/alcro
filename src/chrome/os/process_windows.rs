@@ -149,17 +149,6 @@ pub fn new_process(
     }
 }
 
-pub fn exited(pid: Process) -> std::io::Result<bool> {
-    use winapi::um::synchapi::WaitForSingleObject;
-    unsafe {
-        match WaitForSingleObject(pid, 0) {
-            WAIT_OBJECT_0 => Ok(true),
-            WAIT_FAILED => Err(std::io::Error::last_os_error()),
-            _ => Ok(false),
-        }
-    }
-}
-
 pub fn wait_proc(pid: Process) -> std::io::Result<()> {
     use winapi::um::synchapi::WaitForSingleObject;
     unsafe {

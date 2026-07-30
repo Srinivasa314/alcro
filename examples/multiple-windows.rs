@@ -9,17 +9,6 @@ use alcro::{Content, UIBuilder, UI};
 use anyhow::Context;
 use serde_json::to_value;
 
-async fn new_window() -> anyhow::Result<Arc<UI>> {
-    let ui = Arc::new(
-        UIBuilder::new()
-            .content(Content::Html(include_str!("./multiple-windows.html")))
-            .run()
-            .await
-            .context("Failed to create new window")?,
-    );
-    Ok(ui)
-}
-
 async fn bind_counter(
     ui: &UI,
     other: Weak<UI>,
@@ -50,8 +39,19 @@ async fn bind_counter(
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let count = Arc::new(AtomicI32::new(0));
-    let ui1 = new_window().await?;
-    let ui2 = new_window().await?;
+    let ui1 = Arc::new(
+        UIBuilder::new()
+            .content(Content::Html(include_str!("./multiple-windows.html")))
+            .run()
+            .await
+            .context("Failed to launch browser")?,
+    );
+    // The second window shares the browser process of the first one
+    let ui2 = Arc::new(
+        ui1.new_window(Content::Html(include_str!("./multiple-windows.html")))
+            .await
+            .context("Failed to open second window")?,
+    );
 
     bind_counter(&ui1, Arc::downgrade(&ui2), count.clone(), "increment", 1).await?;
     bind_counter(&ui1, Arc::downgrade(&ui2), count.clone(), "decrement", -1).await?;
