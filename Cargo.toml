@@ -20,7 +20,19 @@ nix = { version = "0.31", features = ["fs", "signal", "process"] }
 tokio = { version = "1.53", features = ["rt", "sync", "io-util", "net", "time"] }
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3.9", features = ["namedpipeapi", "synchapi", "handleapi", "processthreadsapi"] }
+winapi = { version = "0.3.9", features = [
+    "errhandlingapi",
+    "fileapi",
+    "handleapi",
+    "minwinbase",
+    "minwindef",
+    "namedpipeapi",
+    "ntdef",
+    "processthreadsapi",
+    "synchapi",
+    "winbase",
+    "winnt",
+] }
 
 [dev-dependencies]
 actix-web = "4"
