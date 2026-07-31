@@ -1,4 +1,4 @@
-use super::{Chrome, JSObject, JSResult, PipeReader, Window};
+use super::{Chrome, JSObject, JSResult, LoadEvent, PipeReader, Window};
 use serde_json::json;
 use std::sync::{atomic::Ordering, Arc};
 use tokio::sync::oneshot;
@@ -59,7 +59,16 @@ pub async fn readloop(c: Arc<Chrome>, mut precv: PipeReader) {
 
             if res["id"] == JSObject::Null && res["method"] == "Page.loadEventFired" {
                 if let Some(window) = window {
-                    let _ = window.load_send.try_send(());
+                    let _ = window.load_send.send(LoadEvent::Loaded);
+                }
+            } else if res["id"] == JSObject::Null && res["method"] == "Page.frameNavigated" {
+                let frame = &res["params"]["frame"];
+                if frame["parentId"] == JSObject::Null {
+                    if let Some(window) = window {
+                        let _ = window.load_send.send(LoadEvent::Navigated(
+                            frame["loaderId"].as_str().unwrap_or("").to_string(),
+                        ));
+                    }
                 }
             } else if res["id"] == JSObject::Null && res["method"] == "Runtime.consoleAPICalled"
                 || res["method"] == "Runtime.exceptionThrown"

@@ -80,6 +80,16 @@ pub enum LogSink {
     File(std::sync::Mutex<std::fs::File>),
 }
 
+/// Page load progress signals forwarded by the read loop.
+pub enum LoadEvent {
+    /// Page.frameNavigated of the main frame, with its loaderId. Used to tell
+    /// a navigation's own load event apart from stale ones (e.g. the initial
+    /// about:blank page finishing to load after Page.navigate was sent).
+    Navigated(String),
+    /// Page.loadEventFired
+    Loaded,
+}
+
 /// The browser process, shared by all of its windows.
 pub struct Chrome {
     id: AtomicI32,
@@ -109,8 +119,8 @@ pub struct Window {
     session: String,
     window_id: AtomicI32,
     bindings: dashmap::DashMap<String, BindingFunc>,
-    load_send: mpsc::Sender<()>,
-    load_recv: Mutex<mpsc::Receiver<()>>,
+    load_send: mpsc::UnboundedSender<LoadEvent>,
+    load_recv: Mutex<mpsc::UnboundedReceiver<LoadEvent>>,
     closed_tx: watch::Sender<bool>,
     closed_rx: watch::Receiver<bool>,
 }
@@ -332,7 +342,7 @@ async fn attach_window(c: &Arc<Chrome>, target: &str, url: &str) -> Result<Arc<W
 }
 
 fn register_window(c: &Arc<Chrome>, target: String, session: String) -> Arc<Window> {
-    let (load_send, load_recv) = mpsc::channel(1);
+    let (load_send, load_recv) = mpsc::unbounded_channel();
     let (closed_tx, closed_rx) = watch::channel(false);
     let window = Arc::new(Window {
         chrome: Arc::clone(c),
@@ -456,10 +466,32 @@ async fn start_session(
 pub async fn load(w: &Arc<Window>, url: &str) -> Result<(), JSError> {
     let mut load_recv = w.load_recv.lock().await;
     while load_recv.try_recv().is_ok() {}
-    send(w, "Page.navigate", &json!({ "url": url }))
+    let res = send(w, "Page.navigate", &json!({ "url": url }))
         .await
-        .to_result_of_jserror()?;
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(30), load_recv.recv()).await;
+        .map_err(JSError::from)?;
+    let loader_id = res["loaderId"].as_str().map(|s| s.to_string());
+    // Wait for the load event belonging to this navigation: events are only
+    // counted once the navigation itself (matched by loaderId) has committed,
+    // so a stale load event of the previous page cannot end the wait early.
+    let mut navigated = loader_id.is_none();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            match load_recv.recv().await {
+                None => break,
+                Some(LoadEvent::Navigated(l)) => {
+                    if Some(&l) == loader_id.as_ref() {
+                        navigated = true;
+                    }
+                }
+                Some(LoadEvent::Loaded) => {
+                    if navigated {
+                        break;
+                    }
+                }
+            }
+        }
+    })
+    .await;
     Ok(())
 }
 
