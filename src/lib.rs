@@ -136,12 +136,11 @@ impl UI {
         }
         args.push("--remote-debugging-pipe");
 
-        let app_arg;
-        if custom_args.contains(&"--headless") {
-            args.push(url);
-        } else {
-            app_arg = format!("--app={}", url);
-            args.push(&app_arg);
+        // The window starts at about:blank and the content is loaded once via
+        // an explicit Page.navigate in launch(), which waits for the load
+        // event. Passing the real url here as well would load the page twice.
+        if !custom_args.contains(&"--headless") {
+            args.push("--app=about:blank");
         }
         let chrome_path = match std::env::var("ALCRO_BROWSER_PATH") {
             Ok(path) => {
@@ -349,6 +348,12 @@ impl UI {
 ///
 /// Drop cannot wait for a graceful shutdown; to close the browser gracefully call
 /// [`UI::close()`] and [`UI::wait_finish()`] before dropping.
+///
+/// Closing a non-last window from Drop requires a running tokio runtime: the
+/// close is spawned as a task. If the runtime is shutting down that task may
+/// never run and the window stays open; the browser process is still cleaned
+/// up once the runtime (and with it the last handle to the browser) is
+/// dropped.
 impl Drop for UI {
     fn drop(&mut self) {
         if self.window.is_closed() {

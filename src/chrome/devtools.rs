@@ -25,11 +25,25 @@ pub async fn readloop(c: Arc<Chrome>, mut precv: PipeReader) {
             if let Some((session, window)) = destroyed {
                 c.windows.remove(&session);
                 let _ = window.closed_tx.send(true);
+                // Fail this window's in-flight commands: their nested
+                // responses will never arrive now that the target is gone.
+                let stale: Vec<i32> = c
+                    .pending
+                    .iter()
+                    .filter(|e| e.value().0 == session)
+                    .map(|e| *e.key())
+                    .collect();
+                for id in stale {
+                    if let Some((_, (_, reschan))) = c.pending.remove(&id) {
+                        let _ = reschan.send(Err(window_closed_error()));
+                    }
+                }
             }
             // Prune windows whose handles were dropped, then exit once no
-            // window is left: the browser process is no longer needed.
+            // window is left (and none is being created): the browser
+            // process is no longer needed.
             c.windows.retain(|_, w| w.upgrade().is_some());
-            if c.windows.is_empty() {
+            if c.windows.is_empty() && c.windows_in_creation.load(Ordering::SeqCst) == 0 {
                 c.kill_process();
                 break;
             }
@@ -72,7 +86,7 @@ pub async fn readloop(c: Arc<Chrome>, mut precv: PipeReader) {
             } else if res["id"].is_i64() {
                 let res_id = res["id"].as_i64().expect("Expected i64") as i32;
 
-                if let Some((_, reschan)) = c.pending.remove(&res_id) {
+                if let Some((_, (_, reschan))) = c.pending.remove(&res_id) {
                     send_result(reschan, &res);
                 }
             }
@@ -85,7 +99,7 @@ pub async fn readloop(c: Arc<Chrome>, mut precv: PipeReader) {
             if let Some((_, reschan)) = c.pending_browser.remove(&res_id) {
                 send_result(reschan, &pmsg);
             } else if pmsg["error"] != JSObject::Null {
-                if let Some((_, reschan)) = c.pending.remove(&res_id) {
+                if let Some((_, (_, reschan))) = c.pending.remove(&res_id) {
                     let _ = reschan.send(Err(pmsg["error"]["message"].clone()));
                 }
             }
@@ -109,6 +123,9 @@ pub async fn send(w: &Arc<Window>, method: &str, params: &JSObject) -> JSResult 
     if c.closed.load(Ordering::Relaxed) {
         return Err(browser_closed_error());
     }
+    if w.is_closed() {
+        return Err(window_closed_error());
+    }
     let id = c.id.fetch_add(1, Ordering::Relaxed) + 1;
     let json_msg = json!({
         "id":id,
@@ -116,7 +133,7 @@ pub async fn send(w: &Arc<Window>, method: &str, params: &JSObject) -> JSResult 
         "params":params
     });
     let (s, r) = oneshot::channel();
-    c.pending.insert(id, s);
+    c.pending.insert(id, (w.session.clone(), s));
 
     let message = json!({
         "id":id,
@@ -167,6 +184,10 @@ pub async fn send_browser(c: &Arc<Chrome>, method: &str, params: &JSObject) -> J
 
 fn browser_closed_error() -> JSObject {
     JSObject::String("Browser has been closed".to_string())
+}
+
+fn window_closed_error() -> JSObject {
+    JSObject::String("Window has been closed".to_string())
 }
 
 fn send_result(reschan: oneshot::Sender<JSResult>, res: &JSObject) {

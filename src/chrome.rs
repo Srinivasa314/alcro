@@ -88,9 +88,14 @@ pub struct Chrome {
     #[cfg(target_family = "windows")]
     pid: usize,
     psend: Mutex<PipeWriter>,
-    pending: dashmap::DashMap<i32, oneshot::Sender<JSResult>>,
+    // Pending session commands, tagged with their session id so they can be
+    // failed when that window closes instead of hanging forever.
+    pending: dashmap::DashMap<i32, (String, oneshot::Sender<JSResult>)>,
     pending_browser: dashmap::DashMap<i32, oneshot::Sender<JSResult>>,
     windows: dashmap::DashMap<String, Weak<Window>>,
+    // Windows past createTarget but not yet in `windows`; the read loop must
+    // not kill the browser while one is in flight.
+    windows_in_creation: AtomicI32,
     headless: bool,
     log_sink: Option<LogSink>,
     closed: AtomicBool,
@@ -231,6 +236,7 @@ pub async fn launch(
         pending: dashmap::DashMap::new(),
         pending_browser: dashmap::DashMap::new(),
         windows: dashmap::DashMap::new(),
+        windows_in_creation: AtomicI32::new(0),
         headless: args.contains(&"--headless"),
         log_sink,
         closed: AtomicBool::new(false),
@@ -248,9 +254,36 @@ pub async fn launch(
     Ok(window)
 }
 
+/// Decrements `windows_in_creation` even when window creation is cancelled at
+/// an await point. If the creation did not register a window and no window is
+/// left, no further Target.targetDestroyed event will prompt the read loop to
+/// shut the browser down, so the guard kills the process itself (the read
+/// loop then exits via pipe EOF).
+struct CreationGuard<'a>(&'a Chrome);
+impl Drop for CreationGuard<'_> {
+    fn drop(&mut self) {
+        self.0.windows_in_creation.fetch_sub(1, Ordering::SeqCst);
+        if self.0.windows.is_empty()
+            && self.0.windows_in_creation.load(Ordering::SeqCst) == 0
+            && !self.0.closed.load(Ordering::Relaxed)
+        {
+            self.0.kill_process();
+        }
+    }
+}
+
 /// Open another window in the same browser process.
+///
+/// If the returned future is cancelled at an await point the browser may be
+/// left with an untracked window until the browser process exits.
 pub async fn new_window(w: &Arc<Window>, url: &str) -> Result<Arc<Window>, JSError> {
     let c = &w.chrome;
+    c.windows_in_creation.fetch_add(1, Ordering::SeqCst);
+    let _guard = CreationGuard(c);
+    create_window(c, url).await
+}
+
+async fn create_window(c: &Arc<Chrome>, url: &str) -> Result<Arc<Window>, JSError> {
     let mut params = json!({ "url": "about:blank" });
     if !c.headless {
         params["newWindow"] = json!(true);
@@ -261,6 +294,28 @@ pub async fn new_window(w: &Arc<Window>, url: &str) -> Result<Arc<Window>, JSErr
         .as_str()
         .expect("Value not of string datatype")
         .to_string();
+
+    match attach_window(c, &target, url).await {
+        Ok(window) => Ok(window),
+        Err(e) => {
+            // Roll back so a half-created window does not linger as an
+            // orphan target for the rest of the browser's lifetime. Its
+            // Target.targetDestroyed event also prompts the read loop to
+            // re-evaluate whether the browser is still needed.
+            match send_browser(c, "Target.closeTarget", &json!({ "targetId": target })).await {
+                Ok(res) => {
+                    if res["success"] == false {
+                        eprintln!("Unable to close orphan window: {}", res);
+                    }
+                }
+                Err(close_err) => eprintln!("Unable to close orphan window: {}", close_err),
+            }
+            Err(e)
+        }
+    }
+}
+
+async fn attach_window(c: &Arc<Chrome>, target: &str, url: &str) -> Result<Arc<Window>, JSError> {
     let session = send_browser(c, "Target.attachToTarget", &json!({ "targetId": target }))
         .await
         .map_err(JSError::from)?["sessionId"]
@@ -268,8 +323,11 @@ pub async fn new_window(w: &Arc<Window>, url: &str) -> Result<Arc<Window>, JSErr
         .expect("Value not of string datatype")
         .to_string();
 
-    let window = register_window(c, target, session);
-    init_window(&window, url).await?;
+    let window = register_window(c, target.to_string(), session);
+    if let Err(e) = init_window(&window, url).await {
+        c.windows.remove(&window.session);
+        return Err(e);
+    }
     Ok(window)
 }
 
@@ -534,13 +592,18 @@ pub async fn bind(w: &Arc<Window>, name: &str, f: BindingFunc) -> Result<(), JSE
 
 /// Close this window. The browser process exits when its last window closes.
 pub async fn close(w: &Arc<Window>) {
-    if let Err(e) = send_browser(
+    match send_browser(
         &w.chrome,
         "Target.closeTarget",
         &json!({ "targetId": w.target }),
     )
     .await
     {
-        eprintln!("{}", e);
+        Ok(res) => {
+            if res["success"] == false {
+                eprintln!("Unable to close window: {}", res);
+            }
+        }
+        Err(e) => eprintln!("{}", e),
     }
 }
