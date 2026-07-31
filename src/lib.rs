@@ -1,7 +1,8 @@
 //! # Alcro
 //!
 //! Alcro is a library to create desktop apps using rust and modern web technologies.
-//! It uses the existing chrome installation for the UI.
+//! It uses the existing chrome installation for the UI. The API is async and runs on
+//! the [`tokio`] runtime.
 //!
 //! # Example
 //!
@@ -10,41 +11,43 @@
 //! use alcro::{UIBuilder, Content};
 //! use serde_json::to_value;
 //!
-//! let ui = UIBuilder::new().content(Content::Html("<html><body>Close Me!</body></html>")).run().expect("Unable to launch");
-//! assert_eq!(ui.eval("document.body.innerText").unwrap(), "Close Me!");
+//! #[tokio::main]
+//! async fn main() {
+//!     let ui = UIBuilder::new().content(Content::Html("<html><body>Close Me!</body></html>")).run().await.expect("Unable to launch");
+//!     assert_eq!(ui.eval("document.body.innerText").await.unwrap(), "Close Me!");
 //!
-//! //Expose rust function to js
-//! ui.bind("product",|args| {
-//!     let mut product = 1;
-//!     for arg in args {
-//!         match arg.as_i64() {
-//!             Some(i) => product*=i,
-//!             None => return Err(to_value("Not number").unwrap())
+//!     //Expose rust function to js
+//!     ui.bind("product", |args| async move {
+//!         let mut product = 1;
+//!         for arg in args {
+//!             match arg.as_i64() {
+//!                 Some(i) => product *= i,
+//!                 None => return Err(to_value("Not number").unwrap()),
+//!             }
 //!         }
-//!     }
-//!     Ok(to_value(product).unwrap())
-//! }).expect("Unable to bind function");
+//!         Ok(to_value(product).unwrap())
+//!     }).await.expect("Unable to bind function");
 //!
-//! assert_eq!(ui.eval("(async () => await product(1,2,3))();").unwrap(), 6);
-//! assert!(ui.eval("(async () => await product(1,2,'hi'))();").is_err());
-//! ui.wait_finish();
+//!     assert_eq!(ui.eval("(async () => await product(1,2,3))();").await.unwrap(), 6);
+//!     assert!(ui.eval("(async () => await product(1,2,'hi'))();").await.is_err());
+//!     ui.wait_finish().await;
+//! }
 //! ```
 //!
 //! To change the path of the browser launched set the ALCRO_BROWSER_PATH environment variable. Only Chromium based browsers work.
 //!
 
 mod chrome;
-#[cfg(target_family = "windows")]
-use chrome::close_handle;
-use chrome::{bind, bounds, close, eval, load, load_css, load_js, set_bounds, Chrome};
-pub use chrome::{BindingContext, Bounds, JSError, JSObject, JSResult, WindowState};
+use chrome::{
+    bind, bounds, close, eval, launch, load, load_css, load_js, new_window, set_bounds,
+    BindingFunc, LogSink, Window,
+};
+pub use chrome::{Bounds, JSError, JSObject, JSResult, LogOutput, WindowState};
 mod locate;
 pub use locate::tinyfiledialogs as dialog;
 use locate::{locate_chrome, LocateChromeError};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::future::Future;
+use std::sync::Arc;
 
 const DEFAULT_CHROME_ARGS: &[&str] = &[
     "--disable-background-networking",
@@ -73,11 +76,13 @@ const DEFAULT_CHROME_ARGS: &[&str] = &[
     "--use-mock-keychain",
 ];
 
-/// The browser window
+/// A browser window.
+///
+/// The browser process is shared: [`UIBuilder::run()`] launches a browser with
+/// its first window, and [`UI::new_window()`] opens further windows in the
+/// same browser. The process exits when its last window is closed or dropped.
 pub struct UI {
-    chrome: Arc<Chrome>,
-    _tmpdir: Option<tempfile::TempDir>,
-    waited: AtomicBool,
+    window: Arc<Window>,
 }
 
 /// Error in launching a UI window
@@ -95,15 +100,19 @@ pub enum UILaunchError {
     /// Error when initializing chrome
     #[error("Error when initializing chrome: {0}")]
     ChromeInitError(#[from] JSError),
+    /// Cannot create the log file
+    #[error("Cannot create log file: {0}")]
+    LogFileCreationError(std::io::Error),
 }
 
 impl UI {
-    fn new(
+    async fn new(
         url: &str,
         dir: Option<&std::path::Path>,
         width: i32,
         height: i32,
         custom_args: &[&str],
+        log_output: Option<&LogOutput>,
     ) -> Result<UI, UILaunchError> {
         let _tmpdir;
         let dir = match dir {
@@ -127,12 +136,11 @@ impl UI {
         }
         args.push("--remote-debugging-pipe");
 
-        let app_arg;
-        if custom_args.contains(&"--headless") {
-            args.push(url);
-        } else {
-            app_arg = format!("--app={}", url);
-            args.push(&app_arg);
+        // The window starts at about:blank and the content is loaded once via
+        // an explicit Page.navigate in launch(), which waits for the load
+        // event. Passing the real url here as well would load the page twice.
+        if !custom_args.contains(&"--headless") {
+            args.push("--app=about:blank");
         }
         let chrome_path = match std::env::var("ALCRO_BROWSER_PATH") {
             Ok(path) => {
@@ -144,32 +152,38 @@ impl UI {
             }
             Err(_) => locate_chrome()?,
         };
-        let chrome = Chrome::new_with_args(&chrome_path, &args)?;
-        Ok(UI {
-            chrome,
-            _tmpdir,
-            waited: AtomicBool::new(false),
-        })
+        let log_sink = match log_output {
+            None => None,
+            Some(LogOutput::Stdout) => Some(LogSink::Stdout),
+            Some(LogOutput::Stderr) => Some(LogSink::Stderr),
+            Some(LogOutput::File(path)) => Some(LogSink::File(std::sync::Mutex::new(
+                std::fs::File::create(path).map_err(UILaunchError::LogFileCreationError)?,
+            ))),
+        };
+        let window = launch(&chrome_path, &args, url, log_sink, _tmpdir).await?;
+        Ok(UI { window })
     }
 
-    /// Returns true if the browser is closed
-    pub fn done(&self) -> bool {
-        self.chrome.done()
-    }
-
-    /// Wait for the browser to be closed
-    pub fn wait_finish(&self) {
-        self.chrome.wait_finish();
-        self.waited.store(true, Ordering::Relaxed);
-    }
-
-    /// Close the browser window
-    pub fn close(&self) {
-        close(self.chrome.clone())
-    }
-
-    /// Load content in the browser. It returns Err if it fails.
-    pub fn load(&self, content: Content) -> Result<(), JSError> {
+    /// Open another window in the same browser process and wait for its
+    /// content to load. It returns Err if it fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![windows_subsystem = "windows"]
+    /// use alcro::{Content, UIBuilder};
+    /// # tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap().block_on(async {
+    /// let ui = UIBuilder::new()
+    ///     .content(Content::Html("<html><body>first</body></html>"))
+    ///     .custom_args(&["--headless"])
+    ///     .run().await.expect("Unable to launch");
+    /// let ui2 = ui.new_window(Content::Html("<html><body>second</body></html>"))
+    ///     .await.expect("Unable to open window");
+    /// assert_eq!(ui.eval("document.body.innerText").await.unwrap(), "first");
+    /// assert_eq!(ui2.eval("document.body.innerText").await.unwrap(), "second");
+    /// # });
+    /// ```
+    pub async fn new_window(&self, content: Content<'_>) -> Result<UI, JSError> {
         let html: String;
         let url = match content {
             Content::Url(u) => u,
@@ -178,16 +192,52 @@ impl UI {
                 &html
             }
         };
-        load(self.chrome.clone(), url)
+        let window = new_window(&self.window, url).await?;
+        Ok(UI { window })
+    }
+
+    /// Returns true if this window is closed
+    pub fn done(&self) -> bool {
+        self.window.is_closed()
+    }
+
+    /// Wait for this window to be closed
+    pub async fn wait_finish(&self) {
+        self.window.wait_closed().await;
+    }
+
+    /// Close this window gracefully. The browser process exits when its last
+    /// window is closed.
+    pub async fn close(&self) {
+        close(&self.window).await
+    }
+
+    /// Load content in the window and wait for the page to load. It returns Err if it fails.
+    pub async fn load(&self, content: Content<'_>) -> Result<(), JSError> {
+        let html: String;
+        let url = match content {
+            Content::Url(u) => u,
+            Content::Html(h) => {
+                html = format!("data:text/html,{}", h);
+                &html
+            }
+        };
+        load(&self.window, url).await
     }
 
     /// Bind a rust function so that JS code can use it. It returns Err if it fails.
-    /// The rust function will be executed in a new thread and can be called asynchronously from Javascript
+    ///
+    /// The function receives the arguments by value and returns a [`Future`] for the
+    /// result (generally by using an `async move` block body). Each invocation from JS
+    /// runs as its own tokio task, so bindings can be called concurrently and may await
+    /// freely; use [`tokio::task::spawn_blocking`] inside the binding for CPU heavy or
+    /// blocking work.
     ///
     /// # Arguments
     ///
     /// * `name` - Name of the function
-    /// * `f` - The function. It should take a list of `JSObject` as argument and return a `JSResult`
+    /// * `f` - The function. It should take a [`Vec`] of [`JSObject`] arguments by value
+    ///         and return a [`Future`] for the [`JSResult`]
     ///
     /// # Examples
     ///
@@ -196,155 +246,29 @@ impl UI {
     /// use alcro::UIBuilder;
     /// use serde_json::to_value;
     ///
-    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().expect("Unable to launch");
-    /// ui.bind("add",|args| {
+    /// # tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap().block_on(async {
+    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().await.expect("Unable to launch");
+    /// ui.bind("add", |args| async move {
     ///     let mut sum = 0;
     ///     for arg in args {
     ///         match arg.as_i64() {
-    ///             Some(i) => sum+=i,
-    ///             None => return Err(to_value("Not number").unwrap())
+    ///             Some(i) => sum += i,
+    ///             None => return Err(to_value("Not number").unwrap()),
     ///         }
     ///     }
     ///     Ok(to_value(sum).unwrap())
-    /// }).expect("Unable to bind function");
-    /// assert_eq!(ui.eval("(async () => await add(1,2,3))();").unwrap(), 6);
-    /// assert!(ui.eval("(async () => await add(1,2,'hi'))();").is_err());
+    /// }).await.expect("Unable to bind function");
+    /// assert_eq!(ui.eval("(async () => await add(1,2,3))();").await.unwrap(), 6);
+    /// assert!(ui.eval("(async () => await add(1,2,'hi'))();").await.is_err());
+    /// # });
     /// ```
-    pub fn bind<F>(&self, name: &str, f: F) -> Result<(), JSError>
+    pub async fn bind<F, Fut>(&self, name: &str, f: F) -> Result<(), JSError>
     where
-        F: Fn(&[JSObject]) -> JSResult + Sync + Send + 'static,
+        F: Fn(Vec<JSObject>) -> Fut + Sync + Send + 'static,
+        Fut: Future<Output = JSResult> + Send + 'static,
     {
-        let f = Arc::new(f);
-        bind(
-            self.chrome.clone(),
-            name,
-            Arc::new(move |context| {
-                let f = f.clone();
-                std::thread::spawn(move || {
-                    let result = f(context.args());
-                    context.complete(result);
-                });
-            }),
-        )
-    }
-
-    /// Bind a rust function callable from JS that can complete asynchronously. If you are using
-    /// [`tokio`], you will probably want to be using [`Self::bind_tokio()`] instead.
-    ///
-    /// Unlike `bind()`, this passes ownership of the arguments to the callback function `f`, and
-    /// allows completing the javascript implementation after returning from `f`. This makes async
-    /// behavior much simpler to implement.
-    ///
-    /// For efficency, `f` will be executed in the message processing loop, and therefore should
-    /// avoid blocking by moving work onto another thread, for example with an async runtime
-    /// spawn method.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - Name of the function
-    /// * `f` - The function. It should take a [`BindingContext`] that gives access to the
-    ///         arguments and allows returning results.
-    ///
-    /// # Examples
-    ///
-    /// `bind()` approximately performs the following:
-    ///
-    /// ```
-    /// #![windows_subsystem = "windows"]
-    /// use alcro::UIBuilder;
-    /// use serde_json::to_value;
-    ///
-    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().expect("Unable to launch");
-    /// ui.bind_async("add", |context| {
-    ///     std::thread::spawn(|| {
-    ///         // imagine this is very expensive, or hits a network...
-    ///         let mut sum = 0;
-    ///         for arg in context.args() {
-    ///             match arg.as_i64() {
-    ///                 Some(i) => sum+=i,
-    ///                 None => return context.err(to_value("Not number").unwrap())
-    ///             }
-    ///         }
-    ///
-    ///         context.complete(Ok(to_value(sum).unwrap()));
-    ///     });
-    /// }).expect("Unable to bind function");
-    /// assert_eq!(ui.eval("(async () => await add(1,2,3))();").unwrap(), 6);
-    /// assert!(ui.eval("(async () => await add(1,2,'hi'))();").is_err());
-    /// ```
-    pub fn bind_async<F>(&self, name: &str, f: F) -> Result<(), JSError>
-    where
-        F: Fn(BindingContext) + Sync + Send + 'static,
-    {
-        bind(self.chrome.clone(), name, Arc::new(f))
-    }
-
-    /// Bind a rust function callable from JS that can complete asynchronously, using the [`tokio`]
-    /// runtime to wrap `bind_async()`, making usage more ergonomic for `tokio` users.
-    ///
-    /// The callback is closer to `bind()` than `bind_async()` in that you take the JS arguments
-    /// and return the JS result, the main difference is that the arguments are passed by value
-    /// and the result is a [`Future`].
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - Name of the function
-    /// * `f` - The function. It should take a [`Vec`] of [`JSObject`] arguments by value, and
-    ///         return a [`Future`] for the [`JSResult`] (generally, by using an `async move`
-    ///         block body)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// #![windows_subsystem = "windows"]
-    /// use alcro::UIBuilder;
-    /// use serde_json::to_value;
-    ///
-    /// # fn main() {
-    /// #   // Ensure a tokio runtime is active for the test. A user will probably be using
-    /// #   // #[tokio::main] instead, which doesn't work in doctests.
-    /// #   let rt = tokio::runtime::Runtime::new().unwrap();
-    /// #   let _guard = rt.enter();
-    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().expect("Unable to launch");
-    /// ui.bind_tokio("add", |args| async move {
-    ///     // imagine this is very expensive, or hits a network...
-    ///     let mut sum = 0;
-    ///     for arg in &args {
-    ///         match arg.as_i64() {
-    ///             Some(i) => sum+=i,
-    ///             None => return Err(to_value("Not number").unwrap())
-    ///         }
-    ///     }
-    ///
-    ///     Ok(to_value(sum).unwrap())
-    /// }).expect("Unable to bind function");
-    /// assert_eq!(ui.eval("(async () => await add(1,2,3))();").unwrap(), 6);
-    /// assert!(ui.eval("(async () => await add(1,2,'hi'))();").is_err());
-    /// # }
-    /// ```
-    ///
-    /// [`Future`]: std::future::Future
-    #[cfg(feature = "tokio")]
-    pub fn bind_tokio<F, R>(&self, name: &str, f: F) -> Result<(), JSError>
-    where
-        F: Fn(Vec<JSObject>) -> R + Send + Sync + 'static,
-        R: std::future::Future<Output = JSResult> + Send + 'static,
-    {
-        // Capture the callers runtime, as using tokio::spawn() inside the binding function
-        // will fail as the message processing loop does not have a runtime registered.
-        let runtime = tokio::runtime::Handle::try_current()
-            .map_err(|err| JSError::from(JSObject::String(err.to_string())))?;
-
-        self.bind_async(name, move |context| {
-            // Create future outside the spawn, avoiding the async block capturing `f`, which
-            // would require cloning it. This is fine as futures must not have side effects until
-            // polled. For async fn, this means no user code gets run until the await.
-            let fut = f(context.args().to_vec());
-            runtime.spawn(async move {
-                let result = fut.await;
-                context.complete(result);
-            });
-        })
+        let func: BindingFunc = Arc::new(move |args| Box::pin(f(args)));
+        bind(&self.window, name, func).await
     }
 
     /// Evaluates js code and returns the result.
@@ -354,14 +278,15 @@ impl UI {
     /// ```
     /// #![windows_subsystem = "windows"]
     /// use alcro::UIBuilder;
-    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().expect("Unable to launch");
-    /// assert_eq!(ui.eval("1+1").unwrap(), 2);
-    /// assert_eq!(ui.eval("'Hello'+' World'").unwrap(), "Hello World");
-    /// assert!(ui.eval("xfgch").is_err());
+    /// # tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap().block_on(async {
+    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().await.expect("Unable to launch");
+    /// assert_eq!(ui.eval("1+1").await.unwrap(), 2);
+    /// assert_eq!(ui.eval("'Hello'+' World'").await.unwrap(), "Hello World");
+    /// assert!(ui.eval("xfgch").await.is_err());
+    /// # });
     /// ```
-
-    pub fn eval(&self, js: &str) -> JSResult {
-        eval(self.chrome.clone(), js)
+    pub async fn eval(&self, js: &str) -> JSResult {
+        eval(&self.window, js).await
     }
 
     /// Evaluates js code and adds functions before document loads. Loaded js is unloaded on reload.
@@ -375,13 +300,14 @@ impl UI {
     /// ```
     /// #![windows_subsystem = "windows"]
     /// use alcro::UIBuilder;
-    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().expect("Unable to launch");
-    /// ui.load_js("function loadedFunction() { return 'This function was loaded from rust'; }").expect("Unable to load js");
-    /// assert_eq!(ui.eval("loadedFunction()").unwrap(), "This function was loaded from rust");
+    /// # tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap().block_on(async {
+    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().await.expect("Unable to launch");
+    /// ui.load_js("function loadedFunction() { return 'This function was loaded from rust'; }").await.expect("Unable to load js");
+    /// assert_eq!(ui.eval("loadedFunction()").await.unwrap(), "This function was loaded from rust");
+    /// # });
     /// ```
-
-    pub fn load_js(&self, script: &str) -> Result<(), JSError> {
-        load_js(self.chrome.clone(), script)
+    pub async fn load_js(&self, script: &str) -> Result<(), JSError> {
+        load_js(&self.window, script).await
     }
 
     /// Loads CSS into current window. Loaded CSS is unloaded on reload.
@@ -395,36 +321,50 @@ impl UI {
     /// ```
     /// #![windows_subsystem = "windows"]
     /// use alcro::UIBuilder;
-    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().expect("Unable to launch");
-    /// ui.load_css("body {display: none;}").expect("Unable to load css");
+    /// # tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap().block_on(async {
+    /// let ui = UIBuilder::new().custom_args(&["--headless"]).run().await.expect("Unable to launch");
+    /// ui.load_css("body {display: none;}").await.expect("Unable to load css");
+    /// # });
     /// ```
-
-    pub fn load_css(&self, css: &str) -> Result<(), JSError> {
-        load_css(self.chrome.clone(), css)
+    pub async fn load_css(&self, css: &str) -> Result<(), JSError> {
+        load_css(&self.window, css).await
     }
 
     /// It changes the size, position or state of the browser window specified by the `Bounds` struct. It returns Err if it fails.
     ///
     /// To change the window state alone use `WindowState::to_bounds()`
-    pub fn set_bounds(&self, b: Bounds) -> Result<(), JSError> {
-        set_bounds(self.chrome.clone(), b)
+    pub async fn set_bounds(&self, b: Bounds) -> Result<(), JSError> {
+        set_bounds(&self.window, b).await
     }
 
     /// It gets the size, position and state of the browser window. It returns Err if it fails.
-    pub fn bounds(&self) -> Result<Bounds, JSObject> {
-        bounds(self.chrome.clone())
+    pub async fn bounds(&self) -> Result<Bounds, JSObject> {
+        bounds(&self.window).await
     }
 }
 
-/// Closes the browser window
+/// Dropping a `UI` closes its window; when it is the last open window of the
+/// browser, the browser process is killed instead.
+///
+/// Drop cannot wait for a graceful shutdown; to close the browser gracefully call
+/// [`UI::close()`] and [`UI::wait_finish()`] before dropping.
+///
+/// Closing a non-last window from Drop requires a running tokio runtime: the
+/// close is spawned as a task. If the runtime is shutting down that task may
+/// never run and the window stays open; the browser process is still cleaned
+/// up once the runtime (and with it the last handle to the browser) is
+/// dropped.
 impl Drop for UI {
     fn drop(&mut self) {
-        if !self.waited.load(Ordering::Relaxed) && !self.done() {
-            self.close();
-            self.wait_finish();
+        if self.window.is_closed() {
+            return;
         }
-        #[cfg(target_family = "windows")]
-        close_handle(self.chrome.clone());
+        if !self.window.has_other_live_windows() {
+            self.window.kill_browser();
+        } else if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let window = self.window.clone();
+            handle.spawn(async move { close(&window).await });
+        }
     }
 }
 
@@ -444,6 +384,7 @@ pub struct UIBuilder<'a> {
     width: i32,
     height: i32,
     custom_args: &'a [&'a str],
+    log_output: Option<LogOutput>,
 }
 
 impl<'a> Default for UIBuilder<'a> {
@@ -461,11 +402,13 @@ impl<'a> UIBuilder<'a> {
             width: 800,
             height: 600,
             custom_args: &[],
+            log_output: None,
         }
     }
 
-    /// Return the UI instance. It returns the Err variant if any error occurs.
-    pub fn run(&self) -> Result<UI, UILaunchError> {
+    /// Launch the browser, wait for the initial page to load and return the UI instance.
+    /// It returns the Err variant if any error occurs.
+    pub async fn run(&self) -> Result<UI, UILaunchError> {
         let html: String;
         let url = match self.content {
             Content::Url(u) => u,
@@ -474,7 +417,15 @@ impl<'a> UIBuilder<'a> {
                 &html
             }
         };
-        UI::new(url, self.dir, self.width, self.height, self.custom_args)
+        UI::new(
+            url,
+            self.dir,
+            self.width,
+            self.height,
+            self.custom_args,
+            self.log_output.as_ref(),
+        )
+        .await
     }
 
     /// Set the content (url or html text)
@@ -499,6 +450,13 @@ impl<'a> UIBuilder<'a> {
     /// Add custom arguments to spawn chrome with
     pub fn custom_args(&mut self, custom_args: &'a [&'a str]) -> &mut Self {
         self.custom_args = custom_args;
+        self
+    }
+
+    /// Log the browser's console messages and uncaught exceptions to the given
+    /// destination. By default they are not logged.
+    pub fn log_output(&mut self, log_output: LogOutput) -> &mut Self {
+        self.log_output = Some(log_output);
         self
     }
 }

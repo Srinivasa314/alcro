@@ -1,4 +1,3 @@
-use super::{PipeReader, PipeWriter};
 use std::ptr::null_mut as NULL;
 
 #[repr(packed)]
@@ -13,7 +12,6 @@ const FPIPE: u8 = 0x08;
 const FDEV: u8 = 0x40;
 pub type Process = HANDLE;
 
-use os_str_bytes::OsStrBytes;
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::OsStrExt;
 
@@ -34,7 +32,10 @@ use winapi::um::processthreadsapi::*;
 use winapi::um::winbase::*;
 use winapi::um::winnt::*;
 
-pub fn new_process(path: &str, args: &[&str]) -> Result<(Process, PipeReader, PipeWriter), String> {
+pub fn new_process(
+    path: &str,
+    args: &[&str],
+) -> Result<(Process, std::fs::File, std::fs::File), String> {
     unsafe {
         let size_sa = size_of::<SECURITY_ATTRIBUTES>() as u32;
         let mut sa = SECURITY_ATTRIBUTES {
@@ -142,20 +143,9 @@ pub fn new_process(path: &str, args: &[&str]) -> Result<(Process, PipeReader, Pi
 
         use std::fs::File;
         use std::os::windows::io::FromRawHandle;
-        let writep = PipeWriter::new(File::from_raw_handle(writepipe3));
-        let readp = PipeReader::new(File::from_raw_handle(readpipe4));
-        Ok((processinfo.hProcess, readp, writep))
-    }
-}
-
-pub fn exited(pid: Process) -> std::io::Result<bool> {
-    use winapi::um::synchapi::WaitForSingleObject;
-    unsafe {
-        match WaitForSingleObject(pid, 0) {
-            WAIT_OBJECT_0 => Ok(true),
-            WAIT_FAILED => Err(std::io::Error::last_os_error()),
-            _ => Ok(false),
-        }
+        let write_file = File::from_raw_handle(writepipe3);
+        let read_file = File::from_raw_handle(readpipe4);
+        Ok((processinfo.hProcess, read_file, write_file))
     }
 }
 
@@ -163,6 +153,16 @@ pub fn wait_proc(pid: Process) -> std::io::Result<()> {
     use winapi::um::synchapi::WaitForSingleObject;
     unsafe {
         if WaitForSingleObject(pid, INFINITE) == WAIT_FAILED {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+pub fn kill_proc(p: Process) -> std::io::Result<()> {
+    unsafe {
+        if TerminateProcess(p, 1) == 0 {
             Err(std::io::Error::last_os_error())
         } else {
             Ok(())
@@ -201,9 +201,11 @@ fn append_arg(cmd: &mut Vec<u16>, arg: &OsStr, force_quotes: bool) -> io::Result
     // that it actually gets passed through on the command line or otherwise
     // it will be dropped entirely when parsed on the other end.
     ensure_no_nuls(arg)?;
-    let arg_bytes = &arg.to_raw_bytes();
-    let quote =
-        force_quotes || arg_bytes.iter().any(|c| *c == b' ' || *c == b'\t') || arg_bytes.is_empty();
+    let quote = force_quotes
+        || arg
+            .encode_wide()
+            .any(|c| c == ' ' as u16 || c == '\t' as u16)
+        || arg.is_empty();
     if quote {
         cmd.push('"' as u16);
     }

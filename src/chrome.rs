@@ -1,21 +1,21 @@
 use std::{
     fmt::Display,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, AtomicI32, Ordering},
+        Arc, Weak,
+    },
 };
 
-use crossbeam_channel::{bounded, Sender};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::atomic::{AtomicI32, Ordering};
+use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 mod devtools;
-use devtools::{readloop, recv_msg, send, send_msg};
+use devtools::{readloop, send, send_browser};
 mod os;
 #[cfg(target_family = "windows")]
 use os::close_process_handle;
-#[cfg(target_family = "unix")]
-use os::kill_proc;
-use os::{exited, new_process, wait_proc, PipeReader, PipeWriter, Process};
+use os::{kill_proc, new_process, wait_proc, PipeReader, PipeWriter, Process};
 
 /// A JS object. It is an alias for `serde_json::Value`. See it's documentation for how to use it.
 pub type JSObject = serde_json::Value;
@@ -58,61 +58,39 @@ impl ToResultOfJSError for JSResult {
     }
 }
 
-/// Context for an async binding function.
-pub struct BindingContext {
-    active: Option<ActiveBindingContext>,
+pub type BindingFuture = std::pin::Pin<Box<dyn std::future::Future<Output = JSResult> + Send>>;
+pub type BindingFunc = Arc<dyn Fn(Vec<JSObject>) -> BindingFuture + Sync + Send>;
+
+/// Where to log the browser's console messages and uncaught exceptions.
+///
+/// By default they are not logged.
+#[derive(Debug, Clone)]
+pub enum LogOutput {
+    /// Log to standard output
+    Stdout,
+    /// Log to standard error
+    Stderr,
+    /// Log to the given file
+    File(std::path::PathBuf),
 }
 
-impl BindingContext {
-    fn new(active: ActiveBindingContext) -> Self {
-        Self {
-            active: Some(active),
-        }
-    }
-
-    /// The arguments from JS.
-    pub fn args(&self) -> &[JSObject] {
-        match &self.active {
-            None => &[],
-            Some(active) => active.payload["args"].as_array().expect("Expected array"),
-        }
-    }
-
-    /// Completes the JS function successfully. Equivalent to `complete(Ok(result))`
-    pub fn done(self, result: JSObject) {
-        self.complete(Ok(result))
-    }
-
-    /// Completes the JS function with an error. Equivalent to `complete(Err(error))`
-    pub fn err(self, error: JSObject) {
-        self.complete(Err(error))
-    }
-
-    /// Completes the JS function, either successfully or not. Takes the [`BindingContext`] by
-    /// value as it releases the outstanding call on the Chrome(ium) side.
-    pub fn complete(mut self, result: JSResult) {
-        if let Some(incomplete) = self.active.take() {
-            complete_binding(incomplete, result)
-        }
-    }
+pub enum LogSink {
+    Stdout,
+    Stderr,
+    File(std::sync::Mutex<std::fs::File>),
 }
 
-impl Drop for BindingContext {
-    fn drop(&mut self) {
-        if let Some(incomplete) = self.active.take() {
-            complete_binding(incomplete, Ok(JSObject::Null))
-        }
-    }
+/// Page load progress signals forwarded by the read loop.
+pub enum LoadEvent {
+    /// Page.frameNavigated of the main frame, with its loaderId. Used to tell
+    /// a navigation's own load event apart from stale ones (e.g. the initial
+    /// about:blank page finishing to load after Page.navigate was sent).
+    Navigated(String),
+    /// Page.loadEventFired
+    Loaded,
 }
 
-struct ActiveBindingContext {
-    chrome: Arc<Chrome>,
-    payload: JSObject,
-    context_id: i64,
-}
-
-type BindingFunc = Arc<dyn Fn(BindingContext) + Sync + Send>;
-
+/// The browser process, shared by all of its windows.
 pub struct Chrome {
     id: AtomicI32,
     #[cfg(target_family = "unix")]
@@ -120,13 +98,31 @@ pub struct Chrome {
     #[cfg(target_family = "windows")]
     pid: usize,
     psend: Mutex<PipeWriter>,
-    precv: Mutex<PipeReader>,
+    // Pending session commands, tagged with their session id so they can be
+    // failed when that window closes instead of hanging forever.
+    pending: dashmap::DashMap<i32, (String, oneshot::Sender<JSResult>)>,
+    pending_browser: dashmap::DashMap<i32, oneshot::Sender<JSResult>>,
+    windows: dashmap::DashMap<String, Weak<Window>>,
+    // Windows past createTarget but not yet in `windows`; the read loop must
+    // not kill the browser while one is in flight.
+    windows_in_creation: AtomicI32,
+    headless: bool,
+    log_sink: Option<LogSink>,
+    closed: AtomicBool,
+    _tmpdir: Option<tempfile::TempDir>,
+}
+
+/// One browser window (a devtools target with its own session).
+pub struct Window {
+    chrome: Arc<Chrome>,
     target: String,
     session: String,
-    kill_send: Sender<()>,
-    pending: dashmap::DashMap<i32, Sender<JSResult>>,
-    window: AtomicI32,
+    window_id: AtomicI32,
     bindings: dashmap::DashMap<String, BindingFunc>,
+    load_send: mpsc::UnboundedSender<LoadEvent>,
+    load_recv: Mutex<mpsc::UnboundedReceiver<LoadEvent>>,
+    closed_tx: watch::Sender<bool>,
+    closed_rx: watch::Receiver<bool>,
 }
 
 /// A struct that stores the size, position and window state of the browser window.
@@ -171,70 +167,238 @@ impl WindowState {
 }
 
 impl Chrome {
-    pub fn new_with_args(chrome_binary: &str, args: &[&str]) -> Result<Arc<Chrome>, JSError> {
-        let (pid, precv, psend) =
-            new_process(chrome_binary, &args).expect("Unable to launch chrome");
-        let (kill_send, kill_recv) = bounded(1);
-
-        let mut c = Chrome {
-            id: AtomicI32::new(2),
-            precv: Mutex::new(precv),
-            psend: Mutex::new(psend),
-            target: String::new(),
-            session: String::new(),
-            window: AtomicI32::new(0),
-            pending: dashmap::DashMap::new(),
-            bindings: dashmap::DashMap::new(),
-            kill_send,
-            #[cfg(target_family = "windows")]
-            pid: pid as usize,
-            #[cfg(target_family = "unix")]
-            pid: pid,
-        };
-
-        c.target = c.find_target();
-        c.session = c.start_session()?;
-
-        let c_arc = Arc::new(c);
-
-        #[cfg(target_family = "unix")]
-        std::thread::spawn(move || {
-            kill_recv.recv().unwrap();
-            kill_proc(pid).expect("Unable to kill process");
-        });
-
-        let c_arc_clone = c_arc.clone();
-        std::thread::spawn(move || readloop(c_arc_clone));
-
-        for (method, args) in [
-            ("Page.enable", JSObject::Null),
-            (
-                "Target.setAutoAttach",
-                json!({"autoAttach": true, "waitForDebuggerOnStart": false}),
-            ),
-            ("Network.enable", JSObject::Null),
-            ("Runtime.enable", JSObject::Null),
-            ("Security.enable", JSObject::Null),
-            ("Performance.enable", JSObject::Null),
-            ("Log.enable", JSObject::Null),
-            ("DOM.enable", JSObject::Null),
-            ("CSS.enable", JSObject::Null),
-        ]
-        .iter()
-        {
-            send(Arc::clone(&c_arc), method, args)?;
+    fn log(&self, msg: &JSObject) {
+        use std::io::Write;
+        match &self.log_sink {
+            None => {}
+            Some(LogSink::Stdout) => println!("Message: {}", msg),
+            Some(LogSink::Stderr) => eprintln!("Message: {}", msg),
+            Some(LogSink::File(f)) => {
+                let mut f = f.lock().expect("Unable to lock");
+                let _ = writeln!(f, "Message: {}", msg);
+            }
         }
-
-        if !args.contains(&"--headless") {
-            let win_id = get_window_for_target(Arc::clone(&c_arc))?;
-            Arc::clone(&c_arc).window.store(win_id, Ordering::Relaxed);
-        }
-        Ok(c_arc)
     }
 
-    fn find_target(&self) -> String {
-        send_msg(
-            &self.psend,
+    fn kill_process(&self) {
+        let _ = kill_proc(self.pid as Process);
+    }
+}
+
+/// The browser process is killed when the last reference to it (via its
+/// windows) is dropped.
+impl Drop for Chrome {
+    fn drop(&mut self) {
+        let _ = kill_proc(self.pid as Process);
+        let _ = wait_proc(self.pid as Process);
+        #[cfg(target_family = "windows")]
+        let _ = close_process_handle(self.pid as Process);
+    }
+}
+
+impl Window {
+    /// Returns true if this window has been closed
+    pub fn is_closed(&self) -> bool {
+        *self.closed_rx.borrow()
+    }
+
+    /// Wait until this window is closed
+    pub async fn wait_closed(&self) {
+        let mut rx = self.closed_rx.clone();
+        let _ = rx.wait_for(|closed| *closed).await;
+    }
+
+    /// Returns true if any other window of the same browser is still open
+    pub fn has_other_live_windows(&self) -> bool {
+        self.chrome.windows.iter().any(|e| {
+            e.key() != &self.session
+                && e.value()
+                    .upgrade()
+                    .map_or(false, |w| !w.is_closed())
+        })
+    }
+
+    /// Synchronous best-effort kill of the whole browser, for use in Drop.
+    pub fn kill_browser(&self) {
+        self.chrome.kill_process();
+    }
+}
+
+/// Launch the browser process and return its first window.
+pub async fn launch(
+    chrome_binary: &str,
+    args: &[&str],
+    url: &str,
+    log_sink: Option<LogSink>,
+    tmpdir: Option<tempfile::TempDir>,
+) -> Result<Arc<Window>, JSError> {
+    let (pid, read_file, write_file) =
+        new_process(chrome_binary, &args).expect("Unable to launch chrome");
+    let mut precv = PipeReader::new(read_file).expect("Unable to open browser pipe");
+    let mut psend = PipeWriter::new(write_file).expect("Unable to open browser pipe");
+
+    let target = find_target(&mut psend, &mut precv).await;
+    let session = start_session(&mut psend, &mut precv, &target).await?;
+
+    let c_arc = Arc::new(Chrome {
+        id: AtomicI32::new(2),
+        psend: Mutex::new(psend),
+        pending: dashmap::DashMap::new(),
+        pending_browser: dashmap::DashMap::new(),
+        windows: dashmap::DashMap::new(),
+        windows_in_creation: AtomicI32::new(0),
+        headless: args.contains(&"--headless"),
+        log_sink,
+        closed: AtomicBool::new(false),
+        _tmpdir: tmpdir,
+        #[cfg(target_family = "windows")]
+        pid: pid as usize,
+        #[cfg(target_family = "unix")]
+        pid,
+    });
+
+    let window = register_window(&c_arc, target, session);
+    tokio::spawn(readloop(Arc::clone(&c_arc), precv));
+
+    init_window(&window, url).await?;
+    Ok(window)
+}
+
+/// Decrements `windows_in_creation` even when window creation is cancelled at
+/// an await point. If the creation did not register a window and no window is
+/// left, no further Target.targetDestroyed event will prompt the read loop to
+/// shut the browser down, so the guard kills the process itself (the read
+/// loop then exits via pipe EOF).
+struct CreationGuard<'a>(&'a Chrome);
+impl Drop for CreationGuard<'_> {
+    fn drop(&mut self) {
+        self.0.windows_in_creation.fetch_sub(1, Ordering::SeqCst);
+        if self.0.windows.is_empty()
+            && self.0.windows_in_creation.load(Ordering::SeqCst) == 0
+            && !self.0.closed.load(Ordering::Relaxed)
+        {
+            self.0.kill_process();
+        }
+    }
+}
+
+/// Open another window in the same browser process.
+///
+/// If the returned future is cancelled at an await point the browser may be
+/// left with an untracked window until the browser process exits.
+pub async fn new_window(w: &Arc<Window>, url: &str) -> Result<Arc<Window>, JSError> {
+    let c = &w.chrome;
+    c.windows_in_creation.fetch_add(1, Ordering::SeqCst);
+    let _guard = CreationGuard(c);
+    create_window(c, url).await
+}
+
+async fn create_window(c: &Arc<Chrome>, url: &str) -> Result<Arc<Window>, JSError> {
+    let mut params = json!({ "url": "about:blank" });
+    if !c.headless {
+        params["newWindow"] = json!(true);
+    }
+    let target = send_browser(c, "Target.createTarget", &params)
+        .await
+        .map_err(JSError::from)?["targetId"]
+        .as_str()
+        .expect("Value not of string datatype")
+        .to_string();
+
+    match attach_window(c, &target, url).await {
+        Ok(window) => Ok(window),
+        Err(e) => {
+            // Roll back so a half-created window does not linger as an
+            // orphan target for the rest of the browser's lifetime. Its
+            // Target.targetDestroyed event also prompts the read loop to
+            // re-evaluate whether the browser is still needed.
+            match send_browser(c, "Target.closeTarget", &json!({ "targetId": target })).await {
+                Ok(res) => {
+                    if res["success"] == false {
+                        eprintln!("Unable to close orphan window: {}", res);
+                    }
+                }
+                Err(close_err) => eprintln!("Unable to close orphan window: {}", close_err),
+            }
+            Err(e)
+        }
+    }
+}
+
+async fn attach_window(c: &Arc<Chrome>, target: &str, url: &str) -> Result<Arc<Window>, JSError> {
+    let session = send_browser(c, "Target.attachToTarget", &json!({ "targetId": target }))
+        .await
+        .map_err(JSError::from)?["sessionId"]
+        .as_str()
+        .expect("Value not of string datatype")
+        .to_string();
+
+    let window = register_window(c, target.to_string(), session);
+    if let Err(e) = init_window(&window, url).await {
+        c.windows.remove(&window.session);
+        return Err(e);
+    }
+    Ok(window)
+}
+
+fn register_window(c: &Arc<Chrome>, target: String, session: String) -> Arc<Window> {
+    let (load_send, load_recv) = mpsc::unbounded_channel();
+    let (closed_tx, closed_rx) = watch::channel(false);
+    let window = Arc::new(Window {
+        chrome: Arc::clone(c),
+        target,
+        session: session.clone(),
+        window_id: AtomicI32::new(0),
+        bindings: dashmap::DashMap::new(),
+        load_send,
+        load_recv: Mutex::new(load_recv),
+        closed_tx,
+        closed_rx,
+    });
+    c.windows.insert(session, Arc::downgrade(&window));
+    window
+}
+
+/// Enable the devtools domains on a fresh session and load the initial url.
+async fn init_window(w: &Arc<Window>, url: &str) -> Result<(), JSError> {
+    for (method, params) in [
+        ("Page.enable", JSObject::Null),
+        (
+            "Target.setAutoAttach",
+            json!({"autoAttach": true, "waitForDebuggerOnStart": false}),
+        ),
+        ("Network.enable", JSObject::Null),
+        ("Runtime.enable", JSObject::Null),
+        ("Security.enable", JSObject::Null),
+        ("Performance.enable", JSObject::Null),
+        ("Log.enable", JSObject::Null),
+        ("DOM.enable", JSObject::Null),
+        ("CSS.enable", JSObject::Null),
+    ]
+    .iter()
+    {
+        send(w, method, params).await?;
+    }
+
+    if !w.chrome.headless {
+        let win_id = send(
+            w,
+            "Browser.getWindowForTarget",
+            &json!({ "targetId": w.target }),
+        )
+        .await
+        .map_err(JSError::from)?["windowId"]
+            .as_i64()
+            .expect("Value not i64") as i32;
+        w.window_id.store(win_id, Ordering::Relaxed);
+    }
+
+    load(w, url).await
+}
+
+async fn find_target(psend: &mut PipeWriter, precv: &mut PipeReader) -> String {
+    psend
+        .write(
             json!(
             {
             "id": 0,
@@ -243,91 +407,108 @@ impl Chrome {
             }
             )
             .to_string(),
-        );
+        )
+        .await
+        .expect("Unable to write to pipe");
 
-        loop {
-            let pmsg: JSObject =
-                serde_json::from_str(&recv_msg(&self.precv)).expect("Invalid JSON");
-            if pmsg["method"] == "Target.targetCreated" {
-                let params = &pmsg["params"];
-                if params["targetInfo"]["type"] == "page" {
-                    return params["targetInfo"]["targetId"]
-                        .as_str()
-                        .expect("Value not of string datatype")
-                        .to_string();
-                }
+    loop {
+        let pmsg: JSObject =
+            serde_json::from_str(&precv.read().await.expect("Unable to read from pipe"))
+                .expect("Invalid JSON");
+        if pmsg["method"] == "Target.targetCreated" {
+            let params = &pmsg["params"];
+            if params["targetInfo"]["type"] == "page" {
+                return params["targetInfo"]["targetId"]
+                    .as_str()
+                    .expect("Value not of string datatype")
+                    .to_string();
             }
         }
     }
+}
 
-    fn start_session(&self) -> Result<String, JSError> {
-        send_msg(
-            &self.psend,
+async fn start_session(
+    psend: &mut PipeWriter,
+    precv: &mut PipeReader,
+    target: &str,
+) -> Result<String, JSError> {
+    psend
+        .write(
             json!(
             {
             "id": 1,
             "method": "Target.attachToTarget",
-            "params": {"targetId": self.target}
+            "params": {"targetId": target}
             }
             )
             .to_string(),
-        );
+        )
+        .await
+        .expect("Unable to write to pipe");
 
-        loop {
-            let pmsg: JSObject =
-                serde_json::from_str(&recv_msg(&self.precv)).expect("Invalid JSON");
-            if pmsg["id"] == 1 {
-                if pmsg["error"] != JSObject::Null {
-                    return Err(pmsg["error"].clone().into());
-                }
-                let session = &pmsg["result"];
-                return Ok(session["sessionId"]
-                    .as_str()
-                    .expect("Value not of string datatype")
-                    .to_string());
+    loop {
+        let pmsg: JSObject =
+            serde_json::from_str(&precv.read().await.expect("Unable to read from pipe"))
+                .expect("Invalid JSON");
+        if pmsg["id"] == 1 {
+            if pmsg["error"] != JSObject::Null {
+                return Err(pmsg["error"].clone().into());
             }
+            let session = &pmsg["result"];
+            return Ok(session["sessionId"]
+                .as_str()
+                .expect("Value not of string datatype")
+                .to_string());
         }
     }
-
-    pub fn done(&self) -> bool {
-        exited(self.pid as Process).expect("Error in getting process state")
-    }
-
-    pub fn wait_finish(&self) {
-        wait_proc(self.pid as Process).expect("Error in waiting for process")
-    }
 }
 
-fn get_window_for_target(c: Arc<Chrome>) -> Result<i32, JSObject> {
-    match send(
-        Arc::clone(&c),
-        "Browser.getWindowForTarget",
-        &json!({
-            "targetId": c.target
-        }),
-    ) {
-        Ok(v) => Ok(v["windowId"].as_i64().expect("Value not i64") as i32),
-        Err(e) => Err(e),
-    }
+pub async fn load(w: &Arc<Window>, url: &str) -> Result<(), JSError> {
+    let mut load_recv = w.load_recv.lock().await;
+    while load_recv.try_recv().is_ok() {}
+    let res = send(w, "Page.navigate", &json!({ "url": url }))
+        .await
+        .map_err(JSError::from)?;
+    let loader_id = res["loaderId"].as_str().map(|s| s.to_string());
+    // Wait for the load event belonging to this navigation: events are only
+    // counted once the navigation itself (matched by loaderId) has committed,
+    // so a stale load event of the previous page cannot end the wait early.
+    let mut navigated = loader_id.is_none();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            match load_recv.recv().await {
+                None => break,
+                Some(LoadEvent::Navigated(l)) => {
+                    if Some(&l) == loader_id.as_ref() {
+                        navigated = true;
+                    }
+                }
+                Some(LoadEvent::Loaded) => {
+                    if navigated {
+                        break;
+                    }
+                }
+            }
+        }
+    })
+    .await;
+    Ok(())
 }
 
-pub fn load(c: Arc<Chrome>, url: &str) -> Result<(), JSError> {
-    send(Arc::clone(&c), "Page.navigate", &json!({ "url": url })).to_result_of_jserror()
-}
-
-pub fn eval(c: Arc<Chrome>, expr: &str) -> JSResult {
+pub async fn eval(w: &Arc<Window>, expr: &str) -> JSResult {
     send(
-        c,
+        w,
         "Runtime.evaluate",
         &json!({
             "expression": expr, "awaitPromise": true, "returnByValue": true
         }),
     )
+    .await
 }
 
-pub fn set_bounds(c: Arc<Chrome>, b: Bounds) -> Result<(), JSError> {
+pub async fn set_bounds(w: &Arc<Window>, b: Bounds) -> Result<(), JSError> {
     let param = json!({
-        "windowId": c.window,
+        "windowId": w.window_id.load(Ordering::Relaxed),
         "bounds": if b.window_state != WindowState::Normal {
             json!({
                 "windowState":b.window_state
@@ -336,17 +517,21 @@ pub fn set_bounds(c: Arc<Chrome>, b: Bounds) -> Result<(), JSError> {
             serde_json::to_value(b).unwrap()
         }
     });
-    send(c, "Browser.setWindowBounds", &param).to_result_of_jserror()
+    send(w, "Browser.setWindowBounds", &param)
+        .await
+        .to_result_of_jserror()
 }
 
-pub fn bounds(c: Arc<Chrome>) -> Result<Bounds, JSObject> {
+pub async fn bounds(w: &Arc<Window>) -> Result<Bounds, JSObject> {
     match send(
-        Arc::clone(&c),
+        w,
         "Browser.getWindowBounds",
         &json!({
-            "windowId": c.window.load(Ordering::Relaxed)
+            "windowId": w.window_id.load(Ordering::Relaxed)
         }),
-    ) {
+    )
+    .await
+    {
         Err(e) => Err(e),
         Ok(result) => {
             let ret: Bounds = serde_json::from_value(result["bounds"].clone())
@@ -356,52 +541,43 @@ pub fn bounds(c: Arc<Chrome>) -> Result<Bounds, JSObject> {
     }
 }
 
-pub fn load_js(c: Arc<Chrome>, script: &str) -> Result<(), JSError> {
+pub async fn load_js(w: &Arc<Window>, script: &str) -> Result<(), JSError> {
     if let Err(e) = send(
-        Arc::clone(&c),
+        w,
         "Page.addScriptToEvaluateOnNewDocument",
         &json!({ "source": script }),
-    ) {
+    )
+    .await
+    {
         return Err(e.into());
     }
-    eval(Arc::clone(&c), &script).to_result_of_jserror()
+    eval(w, &script).await.to_result_of_jserror()
 }
 
-pub fn load_css(c: Arc<Chrome>, css: &str) -> Result<(), JSError> {
-    let frame_tree = match send(
-        Arc::clone(&c),
-        "Page.getFrameTree",
-        &json!({ "targetId": c.target }),
-    ) {
+pub async fn load_css(w: &Arc<Window>, css: &str) -> Result<(), JSError> {
+    let frame_tree = match send(w, "Page.getFrameTree", &json!({ "targetId": w.target })).await {
         Ok(ft) => ft,
         Err(e) => return Err(e.into()),
     };
     let frame_id = frame_tree["frameTree"]["frame"]["id"].as_str().unwrap();
-    let style_sheet = match send(
-        Arc::clone(&c),
-        "CSS.createStyleSheet",
-        &json!({ "frameId": frame_id }),
-    ) {
+    let style_sheet = match send(w, "CSS.createStyleSheet", &json!({ "frameId": frame_id })).await {
         Ok(ss) => ss,
         Err(e) => return Err(e.into()),
     };
     let style_sheet_id = style_sheet["styleSheetId"].as_str().unwrap();
     send(
-        Arc::clone(&c),
+        w,
         "CSS.setStyleSheetText",
         &json!({ "styleSheetId": style_sheet_id, "text": css }),
     )
+    .await
     .to_result_of_jserror()
 }
 
-pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> Result<(), JSError> {
-    c.bindings.insert(name.to_string(), f);
+pub async fn bind(w: &Arc<Window>, name: &str, f: BindingFunc) -> Result<(), JSError> {
+    w.bindings.insert(name.to_string(), f);
 
-    if let Err(e) = send(
-        Arc::clone(&c),
-        "Runtime.addBinding",
-        &json!({ "name": name }),
-    ) {
+    if let Err(e) = send(w, "Runtime.addBinding", &json!({ "name": name })).await {
         return Err(e.into());
     }
 
@@ -435,58 +611,31 @@ pub fn bind(c: Arc<Chrome>, name: &str, f: BindingFunc) -> Result<(), JSError> {
     );
 
     if let Err(e) = send(
-        Arc::clone(&c),
+        w,
         "Page.addScriptToEvaluateOnNewDocument",
         &json!({ "source": script }),
-    ) {
+    )
+    .await
+    {
         return Err(e.into());
     }
-    eval(Arc::clone(&c), &script).to_result_of_jserror()
+    eval(w, &script).await.to_result_of_jserror()
 }
 
-fn complete_binding(context: ActiveBindingContext, result: JSResult) {
-    let (r, e) = match result {
-        Ok(x) => (x.to_string(), r#""""#.to_string()),
-        Err(e) => ("".to_string(), e.to_string()),
-    };
-
-    let expr = format!(
-        r"
-        if ({error}) {{
-            window['{name}']['errors'].get({seq})({error});
-        }} else {{
-            window['{name}']['callbacks'].get({seq})({result});
-        }}
-        window['{name}']['callbacks'].delete({seq});
-        window['{name}']['errors'].delete({seq});
-        ",
-        name = context.payload["name"].as_str().expect("Expected string"),
-        seq = context.payload["seq"].as_i64().expect("Expected i64"),
-        result = r,
-        error = e
-    );
-
-    if let Err(e) = send(
-        context.chrome,
-        "Runtime.evaluate",
-        &json!({
-            "expression":expr,
-            "contextId":context.context_id
-        }),
-    ) {
-        eprintln!("{}", e);
-    }
-}
-
-pub fn close(c: Arc<Chrome>) {
-    std::thread::spawn(move || {
-        if let Err(e) = send(c, "Browser.close", &json!({})) {
-            eprintln!("{}", e);
+/// Close this window. The browser process exits when its last window closes.
+pub async fn close(w: &Arc<Window>) {
+    match send_browser(
+        &w.chrome,
+        "Target.closeTarget",
+        &json!({ "targetId": w.target }),
+    )
+    .await
+    {
+        Ok(res) => {
+            if res["success"] == false {
+                eprintln!("Unable to close window: {}", res);
+            }
         }
-    });
-}
-
-#[cfg(target_family = "windows")]
-pub fn close_handle(c: Arc<Chrome>) {
-    close_process_handle(c.pid as Process).expect("Unable to close handle")
+        Err(e) => eprintln!("{}", e),
+    }
 }
